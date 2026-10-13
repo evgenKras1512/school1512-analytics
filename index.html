@@ -2759,7 +2759,7 @@ function renderAnalyticsTeachers(tabs) {
         <thead><tr><th>#</th><th>Учитель</th><th class="text-right">Назначений</th>
         <th class="text-right">Оценок</th><th class="text-right">Ср. балл</th><th></th></tr></thead>
         <tbody>${rows}</tbody></table></div>`
-      : `<div class="empty"><div class="empty-icon">👨‍🏫</div><div>Нет данных</div></div>`}
+      : `<div class="empty"><div class="empty-icon">👨🏫</div><div>Нет данных</div></div>`}
     </div>
   `, 'analytics');
 }
@@ -3228,7 +3228,7 @@ function render() {
     case 'analytics':  renderAnalytics(); break;
     case 'journal':    renderJournal(); break;
     case 'subject-teachers': renderSubjectTeachers(); break;
-    case 'teacher':    renderStub('Карточка учителя'); break;
+    case 'teacher':    renderTeacherDetail(+param); break;
     case 'directories': renderDirectories(); break;
     case 'users':       renderUsers(); break;
     case 'backup':      renderBackup(); break;
