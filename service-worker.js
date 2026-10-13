@@ -4,7 +4,7 @@
    Пути ОТНОСИТЕЛЬНЫЕ (./) для совместимости с GitHub Pages
    ============================================================ */
 
-const CACHE_VERSION = 'v1.0.0';
+const CACHE_VERSION = 'v1.1.0';
 const CACHE_NAME = `school-analytics-${CACHE_VERSION}`;
 
 /* Ресурсы для кэширования при установке (offline shell)
