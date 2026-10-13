@@ -3200,5 +3200,1442 @@ window.addEventListener('load', () => {
   }
 });
 </script>
+  <script>
+/* ============================================================
+   ИСПРАВЛЕНИЕ v5.1.0 — добавляем недостающие функции
+   Все определения ниже перезаписывают заглушки v5 и закрывают
+   отсутствующие функции (showModal, exportStudent, renderClasses и др.)
+   ============================================================ */
+
+/* ---------- Модальное окно ---------- */
+function showModal(content) {
+  const existing = document.getElementById('modalOverlay');
+  if (existing) existing.remove();
+  const div = document.createElement('div');
+  div.className = 'modal-overlay';
+  div.id = 'modalOverlay';
+  div.innerHTML = `<div class="modal">
+      <button class="close-btn" onclick="closeModal()" title="Закрыть">×</button>
+      ${content}
+    </div>`;
+  div.addEventListener('click', e => { if (e.target === div) closeModal(); });
+  document.body.appendChild(div);
+}
+function closeModal() {
+  const m = document.getElementById('modalOverlay');
+  if (m) m.remove();
+}
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+
+/* ---------- CSV утилиты ---------- */
+function csvEscape(v) {
+  const s = String(v ?? '');
+  if (s.includes(';') || s.includes('"') || s.includes('\n') || s.includes(',')) {
+    return '"' + s.replace(/"/g, '""') + '"';
+  }
+  return s;
+}
+
+/* ---------- Экспорт PDF ---------- */
+function exportPDF(html, title) {
+  const w = window.open('', '_blank');
+  if (!w) { showToast('Разрешите всплывающие окна', 'error'); return; }
+  w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(title)}</title>
+    <style>
+      * { margin:0; padding:0; box-sizing:border-box; }
+      body { font-family:'Times New Roman', serif; font-size:11pt; padding:20mm 15mm; color:#000; }
+      h1 { font-size:16pt; text-align:center; margin-bottom:4px; }
+      h2 { font-size:12pt; text-align:center; font-weight:normal; color:#444; margin-bottom:18px; }
+      h3 { font-size:12pt; margin:16px 0 8px; }
+      table { width:100%; border-collapse:collapse; margin-bottom:12px; font-size:9pt; }
+      th,td { border:1px solid #333; padding:4px 6px; text-align:center; }
+      th { background:#e8e8e8; font-weight:bold; }
+      td.left,th.left { text-align:left; }
+      .info-table td { text-align:left; border:none; padding:3px 6px; }
+      .info-table td:first-child { font-weight:bold; width:200px; }
+      .sig { margin-top:40px; display:flex; justify-content:space-between; font-size:10pt; gap:20px; }
+      .sig > div { flex:1; }
+      .footer { margin-top:24px; font-size:8pt; color:#666; text-align:center; border-top:1px solid #ccc; padding-top:6px; }
+      .chart-img { width:100%; max-width:700px; margin:10px auto; display:block; border:1px solid #ccc; }
+      .note { padding:8px 12px; margin-bottom:8px; background:#f8f8f8; border-left:3px solid #666; font-size:10pt; }
+      .note-meta { font-size:9pt; color:#555; margin-bottom:4px; }
+      @media print { body { padding:10mm; } .no-print { display:none; } }
+      .no-print { text-align:center; margin-bottom:16px; }
+      .no-print button { padding:10px 24px; font-size:14px; cursor:pointer; background:#2c5282; color:#fff; border:none; border-radius:6px; margin:0 4px; }
+    </style></head><body>
+    <div class="no-print">
+      <button onclick="window.print()">🖨 Печать / Сохранить в PDF</button>
+      <button onclick="window.close()">Закрыть</button>
+    </div>
+    ${html}
+    <div class="footer">Документ сформирован автоматически ${new Date().toLocaleString('ru-RU')} · Школьная аналитика</div>
+    <script>setTimeout(()=>window.print(),600);<\/script>
+    </body></html>`);
+  w.document.close();
+}
+
+function renderChartToImage(type, width, height, config) {
+  const c = document.createElement('canvas');
+  c.width = width; c.height = height;
+  c.style.display = 'none';
+  document.body.appendChild(c);
+  const tmp = new Chart(c, { ...config, options: { ...config.options, responsive: false, animation: false } });
+  const url = c.toDataURL('image/png', 1.0);
+  tmp.destroy(); c.remove();
+  return `<img src="${url}" class="chart-img" alt="График">`;
+}
+
+/* ---------- Экспорт ученика в PDF ---------- */
+function exportStudent(id) {
+  const s = DB.getStudent(id);
+  if (!s) return;
+  const c = DB.getClasses().find(x => x.id === s.classId);
+  const b = c ? DB.getBuildings().find(x => x.id === c.buildingId) : null;
+  const t = c ? DB.getTeachers().find(x => x.id === c.teacherId) : null;
+  const m = gradeMatrix(id);
+  const subjects = DB.getSubjects().filter(sub => PERIODS.some(p => m[sub + '|' + p]));
+  const diags = DB.getDiagnostics().filter(d => d.studentId === id);
+
+  let html = `<h1>Аналитическая справка по обучающемуся</h1>
+    <h2>${esc(fullName(s))}</h2>
+    <table class="info-table">
+      <tr><td>Дата рождения:</td><td>${esc(fmtDate(s.birthDate))}</td></tr>
+      <tr><td>Класс:</td><td>${esc(c ? c.name : '—')}</td></tr>
+      <tr><td>Номер здания школы:</td><td>${esc(b ? b.name : '—')}</td></tr>
+      <tr><td>Классный руководитель:</td><td>${esc(t ? t.name : '—')}</td></tr>
+    </table>`;
+
+  if (subjects.length) {
+    html += `<h3>Успеваемость</h3><table>
+      <thead><tr><th class="left">Предмет</th><th class="left">Учитель</th>
+        ${PERIODS.map(p => `<th>${p}</th>`).join('')}</tr></thead><tbody>`;
+    subjects.forEach(sub => {
+      const st = c ? DB.getSubjectTeacher(c.id, sub) : null;
+      html += `<tr><td class="left">${esc(sub)}</td><td class="left">${esc(st ? st.name : '—')}</td>`;
+      PERIODS.forEach(p => {
+        const cell = m[sub + '|' + p];
+        if (!cell) { html += '<td>—</td>'; return; }
+        const parts = [];
+        ['текущая','промежуточная','итоговая'].forEach(ty => {
+          if (cell[ty]) parts.push(`${cell[ty][cell[ty].length-1].value} <small>(${ty.slice(0,4)}.)</small>`);
+        });
+        html += `<td>${parts.join('<br>') || '—'}</td>`;
+      });
+      html += '</tr>';
+    });
+    html += `</tbody></table>`;
+  }
+
+  if (diags.length) {
+    html += `<h3>Диагностики</h3><table>
+      <thead><tr><th class="left">Название</th><th>Тип</th><th>Дата</th>
+      <th>Результат</th><th>Уровень</th></tr></thead><tbody>`;
+    diags.forEach(d => {
+      html += `<tr><td class="left">${esc(d.title)}</td><td>${esc(d.type||'')}</td>
+        <td>${esc(fmtDate(d.date))}</td><td>${esc(d.result||'')}</td>
+        <td>${esc(d.level||'')}</td></tr>`;
+    });
+    html += `</tbody></table>`;
+  }
+
+  // Графики
+  const chartGrades = DB.getGrades().filter(g => g.studentId === id && /^[2-5]$/.test(g.value));
+  const values = PERIODS.map(p => {
+    const gs = chartGrades.filter(g => g.period === p);
+    return gs.length ? +(gs.reduce((a,b)=>a+ +b.value,0)/gs.length).toFixed(2) : null;
+  });
+  html += '<h3>Динамика по четвертям</h3>';
+  html += renderChartToImage('line', 900, 400, {
+    type: 'line',
+    data: { labels: PERIODS, datasets: [{ label: 'Средний балл', data: values,
+      borderColor: '#2c5282', backgroundColor: 'rgba(44,82,130,.12)',
+      fill: true, tension: .3, pointRadius: 5, pointBackgroundColor: '#2c5282', spanGaps: true }] },
+    options: { animation: false, responsive: false,
+      plugins: { legend: { labels: { font: { size: 14 } } } },
+      scales: { y: { min: 2, max: 5, ticks: { stepSize: .5 } } } }
+  });
+
+  const subjValues = subjects.map(sub => { const v = finalGrade(id, sub); return /^[2-5]$/.test(v) ? +v : null; });
+  html += '<h3>Итоговые оценки</h3>';
+  html += renderChartToImage('bar', 900, 400, {
+    type: 'bar',
+    data: { labels: subjects, datasets: [{ label: 'Итоговая', data: subjValues,
+      backgroundColor: subjValues.map(v => v===5?'#38a169':v===4?'#3182ce':v===3?'#dd6b20':v===2?'#e53e3e':'#cbd5e0'),
+      borderRadius: 6 }] },
+    options: { animation: false, responsive: false,
+      plugins: { legend: { display: false } },
+      scales: { y: { min: 0, max: 5, ticks: { stepSize: 1 } },
+                x: { ticks: { maxRotation: 60, minRotation: 40, font: { size: 11 } } } } }
+  });
+
+  const counts = {'5':0,'4':0,'3':0,'2':0};
+  chartGrades.forEach(g => counts[g.value]++);
+  html += '<h3>Распределение оценок</h3>';
+  html += renderChartToImage('doughnut', 600, 400, {
+    type: 'doughnut',
+    data: { labels: ['5','4','3','2'],
+      datasets: [{ data: [counts['5'],counts['4'],counts['3'],counts['2']],
+        backgroundColor: ['#38a169','#3182ce','#dd6b20','#e53e3e'], borderWidth: 2, borderColor: '#fff' }] },
+    options: { animation: false, responsive: false, plugins: { legend: { position: 'bottom' } } }
+  });
+
+  html += `<div class="sig">
+      <div>Классный руководитель: ___________________ / ${esc(t ? t.name : '____________')}</div>
+      <div>Дата: «____» ____________ 20___ г.</div>
+    </div>`;
+  exportPDF(html, 'Справка — ' + fullName(s));
+}
+
+/* ---------- Экспорт класса в PDF ---------- */
+function exportClass(classId) {
+  const c = DB.getClasses().find(x => x.id === classId);
+  if (!c) return;
+  const b = DB.getBuildings().find(x => x.id === c.buildingId);
+  const t = DB.getTeachers().find(x => x.id === c.teacherId);
+  const students = DB.getStudents().filter(s => s.classId === classId)
+    .sort((a,b) => a.lastName.localeCompare(b.lastName, 'ru'));
+  if (!students.length) { showToast('Нет учеников в классе', 'error'); return; }
+  const subjects = DB.getSubjects();
+
+  let html = `<h1>Аналитическая справка по классу</h1>
+    <h2>${esc(c.name)} · ${esc(b ? b.name : '')}</h2>
+    <table class="info-table">
+      <tr><td>Классный руководитель:</td><td>${esc(t ? t.name : '—')}</td></tr>
+      <tr><td>Количество обучающихся:</td><td>${students.length}</td></tr>
+    </table>
+
+    <h3>Учителя класса</h3>
+    <table>
+      <thead><tr><th class="left">Предмет</th><th class="left">Учитель</th><th>МЦКО</th></tr></thead>
+      <tbody>
+        ${subjects.map(sub => {
+          const st = DB.getSubjectTeacher(c.id, sub);
+          return `<tr><td class="left">${esc(sub)}</td><td class="left">${esc(st ? st.name : '—')}</td><td>${esc(st ? (st.mckoLevel || 'нет') : '—')}</td></tr>`;
+        }).join('')}
+      </tbody>
+    </table>
+
+    <h3>Список обучающихся</h3>
+    <table>
+      <thead><tr><th>№</th><th class="left">ФИО</th><th>Дата рождения</th></tr></thead>
+      <tbody>${students.map((s,i) => `<tr>
+        <td>${i+1}</td><td class="left">${esc(fullName(s))}</td>
+        <td>${esc(fmtDate(s.birthDate))}</td></tr>`).join('')}
+      </tbody>
+    </table>`;
+
+  html += `<h3>Итоговые оценки</h3><table>
+    <thead><tr><th>№</th><th class="left">ФИО</th>
+      ${subjects.map(s => `<th>${esc(s.length > 10 ? s.slice(0,9)+'.' : s)}</th>`).join('')}
+      <th>Ср.</th></tr></thead><tbody>`;
+  students.forEach((s, i) => {
+    let sum = 0, cnt = 0;
+    let row = `<tr><td>${i+1}</td><td class="left">${esc(shortName(s))}</td>`;
+    subjects.forEach(sub => {
+      const v = finalGrade(s.id, sub);
+      if (/^[2-5]$/.test(v)) { sum += +v; cnt++; }
+      row += `<td>${esc(v || '—')}</td>`;
+    });
+    row += `<td>${cnt ? (sum/cnt).toFixed(2) : '—'}</td></tr>`;
+    html += row;
+  });
+  html += `</tbody></table>`;
+
+  html += `<div class="sig">
+      <div>Классный руководитель: ___________________ / ${esc(t ? t.name : '____________')}</div>
+      <div>Дата: «____» ____________ 20___ г.</div>
+    </div>`;
+  exportPDF(html, 'Справка — класс ' + c.name);
+}
+
+/* ---------- Карточка учителя — редирект ---------- */
+function openTeacherCard(id) {
+  closeModal();
+  location.hash = 'teacher/' + id;
+}
+
+/* ============================================================
+   ЗАМЕНА ЗАГЛУШЕК — РЕАЛЬНЫЕ РЕАЛИЗАЦИИ
+   ============================================================ */
+
+/* ---------- renderClasses ---------- */
+function renderClasses() {
+  const classes = allowedClasses();
+  const students = allowedStudents();
+  const isAdmin = SESSION.role === 'admin';
+  const rows = classes.map(c => {
+    const b = DB.getBuildings().find(x => x.id === c.buildingId);
+    const t = DB.getTeachers().find(x => x.id === c.teacherId);
+    const cnt = students.filter(s => s.classId === c.id).length;
+    const subjects = DB.getSubjects();
+    let assignedCount = 0;
+    subjects.forEach(sub => { if (DB.getSubjectTeacher(c.id, sub)) assignedCount++; });
+    return `<tr>
+      <td><b>${esc(c.name)}</b></td>
+      <td class="hide-mobile">${esc(b ? b.name : '—')}</td>
+      <td class="hide-mobile">${esc(t ? t.name : '—')}</td>
+      <td class="text-right">${cnt}</td>
+      <td class="text-right hide-mobile"><span class="badge badge-purple">${assignedCount}/${subjects.length}</span></td>
+      <td class="text-right nowrap">
+        <div class="btn-group" style="justify-content:flex-end;">
+          <button class="btn btn-outline btn-sm btn-icon" onclick="studentFilter.classId=${c.id};go('students')" title="Ученики">${icon('users', 12)}</button>
+          <button class="btn btn-success btn-sm btn-icon" onclick="exportClass(${c.id})" title="PDF">${icon('file-pdf', 12)}</button>
+          ${isAdmin ? `
+            <button class="btn btn-outline btn-sm btn-icon" onclick="classForm(${c.id})" title="Редактировать">${icon('edit', 12)}</button>
+            <button class="btn btn-danger btn-sm btn-icon" onclick="delClass(${c.id})" title="Удалить">${icon('trash', 12)}</button>` : ''}
+        </div>
+      </td>
+    </tr>`;
+  }).join('');
+  page(`
+    <div class="card">
+      <div class="row-flex" style="justify-content:space-between;margin-bottom:16px;">
+        <h2 style="margin:0;">${icon('building', 20)} Классы</h2>
+        ${isAdmin ? `<button class="btn btn-primary btn-sm" onclick="classForm()">${icon('plus', 14)} Добавить</button>` : ''}
+      </div>
+      ${classes.length ? `<div class="table-wrap"><table>
+        <thead><tr><th>Класс</th><th class="hide-mobile">Здание</th><th class="hide-mobile">Рук-ль</th>
+        <th class="text-right">Уч.</th><th class="text-right hide-mobile">Учителя</th><th></th></tr></thead>
+        <tbody>${rows}</tbody></table></div>`
+      : `<div class="empty"><div class="empty-icon">🏫</div><div>Нет классов</div>
+        ${isAdmin ? `<button class="btn btn-primary btn-sm" onclick="classForm()">${icon('plus', 14)} Добавить первый класс</button>` : ''}</div>`}
+    </div>
+  `, 'classes');
+}
+
+function classForm(id) {
+  const c = id ? DB.getClasses().find(x => x.id === id) : null;
+  const buildings = DB.getBuildings();
+  const teachers = DB.getTeachers();
+  showModal(`
+    <h2>${c ? 'Редактирование' : 'Новый'} класс</h2>
+    <div class="form-grid">
+      <div class="form-group"><label>Название *</label>
+        <input id="c_name" value="${esc(c?c.name:'')}" placeholder="5А"></div>
+      <div class="form-group"><label>Здание</label>
+        <select id="c_building">${buildings.map(b =>
+          `<option value="${b.id}" ${c&&c.buildingId===b.id?'selected':''}>${esc(b.name)}</option>`).join('')}</select></div>
+      <div class="form-group"><label>Кл. руководитель</label>
+        <select id="c_teacher"><option value="">— нет —</option>
+          ${teachers.map(t => `<option value="${t.id}" ${c&&c.teacherId===t.id?'selected':''}>${esc(t.name)}</option>`).join('')}
+        </select></div>
+    </div>
+    <div class="form-actions">
+      <button class="btn btn-primary" onclick="saveClass(${id||'null'})">${icon('save', 14)} Сохранить</button>
+      <button class="btn btn-outline" onclick="closeModal()">Отмена</button>
+    </div>
+  `);
+}
+
+function saveClass(id) {
+  const name = document.getElementById('c_name').value.trim();
+  if (!name) { showToast('Укажите название', 'error'); return; }
+  const data = {
+    name,
+    buildingId: +document.getElementById('c_building').value,
+    teacherId: +document.getElementById('c_teacher').value || null,
+  };
+  if (!id) UndoStack.push('Создание класса');
+  if (id) DB.updateClass(id, data); else DB.addClass(data);
+  closeModal();
+  showToast(id ? 'Класс обновлён' : 'Класс создан', 'success');
+  render();
+}
+
+function delClass(id) {
+  const c = DB.getClasses().find(x => x.id === id);
+  if (!confirm(`Удалить класс «${c.name}»?`)) return;
+  UndoStack.push('Удаление класса');
+  DB.deleteClass(id);
+  showToast('Класс удалён', 'success');
+  render();
+}
+
+/* ---------- renderSubjectTeachers ---------- */
+function renderSubjectTeachers() {
+  if (SESSION.role !== 'admin') { go('dashboard'); return; }
+  const classes = DB.getClasses();
+  const subjects = DB.getSubjects();
+  const teachersList = DB.getSubjectTeachersList();
+
+  let headerRow = '<th style="text-align:left;min-width:150px;position:sticky;left:0;background:var(--primary);color:#fff;z-index:3;">Класс</th>';
+  subjects.forEach(sub => {
+    headerRow += `<th class="subject-head" style="min-width:130px;">${esc(sub)}</th>`;
+  });
+
+  const rows = classes.map(c => {
+    let row = `<td class="class-name">${esc(c.name)}</td>`;
+    subjects.forEach(sub => {
+      const current = DB.getSubjectTeacher(c.id, sub);
+      const opts = teachersList.map(t =>
+        `<option value="${t.id}" ${current && current.id === t.id ? 'selected' : ''}>${esc(t.name)}</option>`
+      ).join('');
+      row += `<td>
+        <select class="${current ? '' : 'empty'}"
+                onchange="onTeacherAssignChange(${c.id}, '${esc(sub)}', this.value)">
+          <option value="">— не назначен —</option>
+          ${opts}
+        </select>
+      </td>`;
+    });
+    return `<tr>${row}</tr>`;
+  }).join('');
+
+  page(`
+    <h2 style="margin-bottom:16px;color:var(--primary);">${icon('user', 20)} Назначение учителей на предметы</h2>
+    <div class="card">
+      <div class="alert alert-info">
+        ${icon('info', 14)} Выберите учителя для каждого предмета в каждом классе. Изменения сохраняются автоматически.
+      </div>
+      <div class="row-flex mb-16" style="gap:10px;">
+        <button class="btn btn-outline btn-sm" onclick="openSubjectTeacherListModal()">
+          ${icon('user', 14)} Справочник учителей (${teachersList.length})
+        </button>
+        <button class="btn btn-outline btn-sm" onclick="openBulkAssignModal()">
+          ${icon('settings', 14)} Назначить всем классам
+        </button>
+      </div>
+      ${classes.length ? `
+        <div class="table-wrap" style="overflow: auto; max-height: 70vh;">
+          <table class="teacher-assign-table">
+            <thead><tr>${headerRow}</tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      ` : `<div class="empty"><div class="empty-icon">🏫</div><div>Нет классов</div></div>`}
+    </div>
+  `, 'subject-teachers');
+}
+
+function onTeacherAssignChange(classId, subject, teacherId) {
+  const tid = teacherId ? +teacherId : null;
+  DB.setSubjectTeacher(classId, subject, tid);
+  UndoStack.push(`Назначение учителя: ${subject}`);
+  renderSubjectTeachers();
+}
+
+function openSubjectTeacherListModal() {
+  const list = DB.getSubjectTeachersList();
+  const rows = list.map(t => `
+    <tr>
+      <td>
+        <b>${esc(t.name)}</b><br>
+        <span class="badge ${MCKO_CLASS[t.mckoLevel || 'нет']}" style="font-size:11px;">
+          МЦКО: ${esc(t.mckoLevel || 'нет')}
+        </span>
+        ${t.mckoDate ? `<span class="muted" style="font-size:12px;"> · ${esc(fmtDate(t.mckoDate))}</span>` : ''}
+      </td>
+      <td class="text-right nowrap">
+        <button class="btn btn-outline btn-sm" onclick="openTeacherCard(${t.id})">${icon('user', 12)} Карточка</button>
+        <button class="btn btn-danger btn-sm btn-icon" onclick="delSubjectTeacher(${t.id})" title="Удалить">${icon('trash', 12)}</button>
+      </td>
+    </tr>
+  `).join('');
+  showModal(`
+    <h2>${icon('user', 20)} Справочник учителей-предметников</h2>
+    <div class="row-flex mb-16" style="gap:10px;">
+      <input id="newTeacherName" placeholder="ФИО нового учителя" style="flex:1;padding:10px 12px;border:1px solid var(--border-strong);border-radius:8px;font-family:inherit;background:var(--bg-input);color:var(--text);">
+      <button class="btn btn-primary" onclick="addSubjectTeacherFromModal()">${icon('plus', 14)} Добавить</button>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Учитель</th><th style="text-align:right;">Действия</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="2" class="muted">Пусто</td></tr>'}</tbody>
+      </table>
+    </div>
+    <div class="form-actions">
+      <button class="btn btn-outline" onclick="closeModal()">Закрыть</button>
+    </div>
+  `);
+}
+
+function addSubjectTeacherFromModal() {
+  const name = document.getElementById('newTeacherName').value.trim();
+  if (!name) { showToast('Введите ФИО', 'error'); return; }
+  DB.addSubjectTeacher(name);
+  UndoStack.push(`Добавление учителя «${name}»`);
+  closeModal();
+  showToast('Учитель добавлен', 'success');
+  render();
+}
+
+function editSubjectTeacher(id) {
+  const t = DB.getSubjectTeachersList().find(x => x.id === id);
+  if (!t) return;
+  const name = prompt('ФИО учителя:', t.name);
+  if (!name || name === t.name) return;
+  DB.updateSubjectTeacher(id, { name: name.trim() });
+  UndoStack.push(`Изменение учителя`);
+  render();
+}
+
+function delSubjectTeacher(id) {
+  const t = DB.getSubjectTeachersList().find(x => x.id === id);
+  if (!confirm(`Удалить учителя «${t.name}»?`)) return;
+  DB.deleteSubjectTeacher(id);
+  UndoStack.push(`Удаление учителя`);
+  showToast('Учитель удалён', 'success');
+  render();
+}
+
+function openBulkAssignModal() {
+  const classes = DB.getClasses();
+  const teachersList = DB.getSubjectTeachersList();
+  if (!classes.length) { showToast('Нет классов', 'error'); return; }
+  if (!teachersList.length) { showToast('Справочник пуст', 'error'); return; }
+  showModal(`
+    <h2>${icon('settings', 20)} Массовое назначение</h2>
+    <div class="alert alert-warn">Назначит выбранного учителя сразу на все предметы в классе.</div>
+    <div class="form-grid">
+      <div class="form-group"><label>Учитель</label>
+        <select id="bulk_teacher">${teachersList.map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join('')}</select>
+      </div>
+      <div class="form-group"><label>Класс</label>
+        <select id="bulk_class">${classes.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select>
+      </div>
+    </div>
+    <div class="form-actions">
+      <button class="btn btn-warn" onclick="applyBulkAssign()">${icon('check', 14)} Назначить</button>
+      <button class="btn btn-outline" onclick="closeModal()">Отмена</button>
+    </div>
+  `);
+}
+
+function applyBulkAssign() {
+  const teacherId = +document.getElementById('bulk_teacher').value;
+  const classId = +document.getElementById('bulk_class').value;
+  if (!teacherId || !classId) { showToast('Заполните', 'error'); return; }
+  DB.setSubjectTeacherBulk(classId, teacherId);
+  UndoStack.push('Массовое назначение');
+  closeModal();
+  showToast('Назначено', 'success');
+  render();
+}
+
+/* ---------- renderDirectories ---------- */
+function renderDirectories() {
+  const buildings = DB.getBuildings();
+  const teachers = DB.getTeachers();
+  const subjects = DB.getSubjects();
+  const bList = buildings.map(b => `<tr><td>${esc(b.name)}</td>
+    <td class="text-right"><button class="btn btn-danger btn-sm btn-icon" onclick="delBuilding(${b.id})" title="Удалить">${icon('trash', 12)}</button></td></tr>`).join('');
+  const tList = teachers.map(t => `<tr><td>${esc(t.name)}</td>
+    <td class="text-right"><button class="btn btn-danger btn-sm btn-icon" onclick="delTeacher(${t.id})" title="Удалить">${icon('trash', 12)}</button></td></tr>`).join('');
+  const sList = subjects.map(s => `<tr><td>${esc(s)}</td>
+    <td class="text-right"><button class="btn btn-danger btn-sm btn-icon" onclick="delSubject('${esc(s)}')" title="Удалить">${icon('trash', 12)}</button></td></tr>`).join('');
+
+  page(`
+    <h2 style="margin-bottom:16px;color:var(--primary);">${icon('settings', 20)} Справочники</h2>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:20px;">
+      <div class="card">
+        <h3>Здания</h3>
+        <div class="search-bar"><input id="nb" placeholder="Название"><button class="btn btn-primary btn-sm" onclick="addBuilding()">${icon('plus', 14)}</button></div>
+        <table><tbody>${bList || '<tr><td class="muted">Пусто</td></tr>'}</tbody></table>
+      </div>
+      <div class="card">
+        <h3>Классные руководители</h3>
+        <div class="search-bar"><input id="nt" placeholder="ФИО"><button class="btn btn-primary btn-sm" onclick="addTeacher()">${icon('plus', 14)}</button></div>
+        <table><tbody>${tList || '<tr><td class="muted">Пусто</td></tr>'}</tbody></table>
+      </div>
+      <div class="card">
+        <h3>Предметы</h3>
+        <div class="search-bar"><input id="ns" placeholder="Название"><button class="btn btn-primary btn-sm" onclick="addSubject()">${icon('plus', 14)}</button></div>
+        <table><tbody>${sList || '<tr><td class="muted">Пусто</td></tr>'}</tbody></table>
+      </div>
+    </div>
+  `, 'directories');
+}
+
+function addBuilding() { const v = document.getElementById('nb').value.trim(); if (!v) return; DB.addBuilding(v); render(); }
+function addTeacher() { const v = document.getElementById('nt').value.trim(); if (!v) return; DB.addTeacher(v); render(); }
+function addSubject() { const v = document.getElementById('ns').value.trim(); if (!v) return; DB.addSubject(v); render(); }
+function delBuilding(id) { if (confirm('Удалить?')) { DB.deleteBuilding(id); render(); } }
+function delTeacher(id) { if (confirm('Удалить?')) { DB.deleteTeacher(id); render(); } }
+function delSubject(s) { if (confirm(`Удалить «${s}»?`)) { DB.deleteSubject(s); render(); } }
+
+/* ---------- renderUsers ---------- */
+function renderUsers() {
+  const users = DB.getUsers();
+  const rows = users.map(u => {
+    const t = u.teacherId ? DB.getTeachers().find(x => x.id === u.teacherId) : null;
+    return `<tr>
+      <td><b>${esc(u.login)}</b></td>
+      <td>${esc(u.name)}</td>
+      <td><span class="badge ${u.role==='admin'?'badge-red':u.role==='director'?'badge-orange':'badge-blue'}">${ROLE_NAMES[u.role]}</span></td>
+      <td class="hide-mobile">${esc(t ? t.name : '—')}</td>
+      <td class="text-right nowrap">
+        <button class="btn btn-outline btn-sm btn-icon" onclick="userForm(${u.id})" title="Редактировать">${icon('edit', 12)}</button>
+        ${u.id !== SESSION.id ? `<button class="btn btn-danger btn-sm btn-icon" onclick="delUser(${u.id})" title="Удалить">${icon('trash', 12)}</button>` : ''}
+      </td>
+    </tr>`;
+  }).join('');
+  page(`
+    <div class="card">
+      <div class="row-flex" style="justify-content:space-between;margin-bottom:16px;">
+        <h2 style="margin:0;">${icon('user', 20)} Пользователи</h2>
+        <button class="btn btn-primary btn-sm" onclick="userForm()">${icon('plus', 14)} Создать</button>
+      </div>
+      <div class="alert alert-info">
+        <b>Классный руководитель</b> — видит только свой класс.<br>
+        <b>Руководитель ОО</b> — все классы, только чтение.<br>
+        <b>Администратор</b> — полный доступ.
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Логин</th><th>ФИО</th><th>Роль</th><th class="hide-mobile">Руководство</th><th></th></tr></thead>
+        <tbody>${rows}</tbody></table></div>
+    </div>
+  `, 'users');
+}
+
+function userForm(id) {
+  const u = id ? DB.getUsers().find(x => x.id === id) : null;
+  const teachers = DB.getTeachers();
+  showModal(`
+    <h2>${u ? 'Редактирование' : 'Новый'} пользователь</h2>
+    <div class="form-grid">
+      <div class="form-group"><label>Логин *</label><input id="u_login" value="${esc(u?u.login:'')}"></div>
+      <div class="form-group"><label>Пароль ${u?'(пусто — не менять)':''}</label><input id="u_pass" type="text"></div>
+      <div class="form-group"><label>ФИО *</label><input id="u_name" value="${esc(u?u.name:'')}"></div>
+      <div class="form-group"><label>Роль</label>
+        <select id="u_role" onchange="toggleTeacherField()">
+          <option value="teacher" ${u&&u.role==='teacher'?'selected':''}>Классный руководитель</option>
+          <option value="director" ${u&&u.role==='director'?'selected':''}>Руководитель ОО</option>
+          <option value="admin" ${u&&u.role==='admin'?'selected':''}>Администратор</option>
+        </select></div>
+    </div>
+    <div id="teacherBlock" style="margin-top:16px;">
+      <div class="form-group"><label>Классное руководство</label>
+        <select id="u_teacher">
+          <option value="">— создать нового по ФИО —</option>
+          ${teachers.map(t => `<option value="${t.id}" ${u&&u.teacherId===t.id?'selected':''}>${esc(t.name)}</option>`).join('')}
+        </select></div>
+    </div>
+    <div class="form-actions">
+      <button class="btn btn-primary" onclick="saveUser(${id||'null'})">${icon('save', 14)} Сохранить</button>
+      <button class="btn btn-outline" onclick="closeModal()">Отмена</button>
+    </div>
+  `);
+  toggleTeacherField();
+}
+
+function toggleTeacherField() {
+  const role = document.getElementById('u_role').value;
+  document.getElementById('teacherBlock').style.display = role === 'teacher' ? 'block' : 'none';
+}
+
+function saveUser(id) {
+  const login = document.getElementById('u_login').value.trim();
+  const pass = document.getElementById('u_pass').value;
+  const name = document.getElementById('u_name').value.trim();
+  const role = document.getElementById('u_role').value;
+  if (!login || !name) { showToast('Заполните', 'error'); return; }
+  if (!id && !pass) { showToast('Пароль', 'error'); return; }
+  const all = DB.getUsers();
+  if (all.some(u => u.login === login && u.id !== id)) { showToast('Логин занят', 'error'); return; }
+  let teacherId = null;
+  if (role === 'teacher') {
+    const sel = +document.getElementById('u_teacher').value;
+    teacherId = sel || DB.addTeacher(name).id;
+  }
+  if (id) {
+    const patch = { login, name, role, teacherId };
+    if (pass) patch.password = pass;
+    DB.updateUser(id, patch);
+    if (id === SESSION.id) setSession({ ...SESSION, ...patch });
+  } else {
+    DB.addUser({ login, password: pass, name, role, teacherId });
+  }
+  closeModal();
+  showToast(id ? 'Пользователь обновлён' : 'Пользователь создан', 'success');
+  render();
+}
+
+function delUser(id) {
+  if (!confirm('Удалить?')) return;
+  DB.deleteUser(id);
+  showToast('Пользователь удалён', 'success');
+  render();
+}
+
+/* ---------- renderJournal (упрощённый, но рабочий) ---------- */
+let journalState = {
+  classId: '', period: 'I четверть',
+  draft: {}, draftDiag: {},
+  diagType: 'ВПР', diagSubject: '', diagDate: '', diagTitle: '',
+};
+const JOURNAL_DRAFT_KEY = 'sa_journal_draft_v5';
+
+function loadDraft() {
+  try {
+    const raw = localStorage.getItem(JOURNAL_DRAFT_KEY);
+    if (raw) {
+      const d = JSON.parse(raw);
+      journalState.draft = d.draft || {};
+      journalState.draftDiag = d.draftDiag || {};
+    }
+  } catch(e) { journalState.draft = {}; journalState.draftDiag = {}; }
+}
+function saveDraft() {
+  localStorage.setItem(JOURNAL_DRAFT_KEY, JSON.stringify({
+    draft: journalState.draft, draftDiag: journalState.draftDiag,
+  }));
+}
+function clearDraft() {
+  journalState.draft = {};
+  journalState.draftDiag = {};
+  localStorage.removeItem(JOURNAL_DRAFT_KEY);
+}
+
+function renderJournal() {
+  const classes = DB.getClasses();
+  const subjects = DB.getSubjects();
+  if (!journalState.classId && classes.length) journalState.classId = String(classes[0].id);
+  const students = DB.getStudents().filter(s => s.classId === +journalState.classId)
+    .sort((a,b) => a.lastName.localeCompare(b.lastName, 'ru'));
+
+  const existing = {};
+  if (journalState.classId) {
+    const sids = students.map(s => s.id);
+    DB.getGrades().filter(g => g.period === journalState.period && sids.includes(g.studentId))
+      .forEach(g => { existing[`${g.studentId}|${g.subject}|${g.type}`] = g.value; });
+  }
+  const getGrade = (sid, subject, type) => {
+    const k = `${sid}|${subject}|${type}`;
+    return journalState.draft[k] !== undefined ? journalState.draft[k] : (existing[k] || '');
+  };
+
+  let headerTop = '<th rowspan="2" class="name-col" style="text-align:left;min-width:150px;">ФИО</th>';
+  let headerBottom = '';
+  subjects.forEach(sub => {
+    const teacher = DB.getSubjectTeacher(+journalState.classId, sub);
+    headerTop += `<th colspan="3" class="subject-group" style="text-align:center;background:var(--bg-hover);color:var(--primary);">
+      <span class="subject-name">${esc(sub)}</span>
+      <span class="subject-teacher">${teacher ? esc(teacher.name) : '—'}</span>
+    </th>`;
+    headerBottom += `
+      <th style="text-align:center;"><span class="type-lbl">тек</span></th>
+      <th style="text-align:center;"><span class="type-lbl">пром</span></th>
+      <th style="text-align:center;"><span class="type-lbl">итог</span></th>`;
+  });
+
+  const rows = students.map(s => {
+    let row = `<td class="name-cell">${esc(fullName(s))}</td>`;
+    subjects.forEach(sub => {
+      GRADE_TYPES.forEach(type => {
+        const k = `${s.id}|${sub}|${type}`;
+        const v = getGrade(s.id, sub, type);
+        const existed = existing[k];
+        let cls = 'journal-input';
+        if (existed && v !== existed) cls += ' changed';
+        else if (v) cls += ' filled';
+        row += `<td class="subject-group" style="padding:2px;">
+          <input class="${cls}" data-sid="${s.id}" data-subject="${esc(sub)}" data-type="${type}"
+                 value="${esc(v)}" maxlength="8"
+                 oninput="onJournalInput(${s.id},'${esc(sub)}','${type}',this.value)"
+                 onkeydown="journalKeyNav(event)">
+        </td>`;
+      });
+    });
+    return `<tr>${row}</tr>`;
+  }).join('');
+
+  page(`
+    <h2 style="margin-bottom:16px;color:var(--primary);">${icon('edit', 20)} Журнал класса</h2>
+    <div class="card">
+      <div class="form-grid mb-16">
+        <div class="form-group"><label>Класс</label>
+          <select onchange="journalState.classId=this.value;renderJournal();">
+            ${classes.map(c => `<option value="${c.id}" ${journalState.classId==c.id?'selected':''}>${esc(c.name)}</option>`).join('')}
+          </select></div>
+        <div class="form-group"><label>Период</label>
+          <select onchange="journalState.period=this.value;renderJournal();">
+            ${PERIODS.map(p => `<option ${journalState.period===p?'selected':''}>${esc(p)}</option>`).join('')}
+          </select></div>
+      </div>
+      ${students.length ? `
+        <div class="row-flex mb-16" style="gap:6px;flex-wrap:wrap;">
+          ${['5','4','3','2'].map(v => `<button class="btn btn-outline btn-sm" onclick="fillAllTypes('${v}')">Все «${v}»</button>`).join('')}
+          <button class="btn btn-outline btn-sm" onclick="clearAll()">Очистить</button>
+        </div>
+        <div class="table-wrap" style="max-height: 60vh; overflow: auto;">
+          <table class="journal-table">
+            <thead><tr>${headerTop}</tr><tr>${headerBottom}</tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+        <div class="form-actions">
+          <button class="btn btn-primary" onclick="saveJournalGrades()">${icon('save', 14)} Сохранить</button>
+          <button class="btn btn-outline" onclick="clearDraft();renderJournal();">Отменить</button>
+        </div>
+      ` : `<div class="empty"><div class="empty-icon">📝</div><div>Нет учеников</div></div>`}
+    </div>
+  `, 'journal');
+}
+
+function onJournalInput(sid, subject, type, value) {
+  const v = value.trim();
+  const k = `${sid}|${subject}|${type}`;
+  if (v === '') delete journalState.draft[k];
+  else journalState.draft[k] = v;
+  saveDraft();
+}
+function journalKeyNav(e) {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    const inputs = Array.from(document.querySelectorAll('.journal-input'));
+    const i = inputs.indexOf(e.target);
+    if (i >= 0 && i < inputs.length - 1) inputs[i + 1].focus();
+  }
+}
+function fillAllTypes(value) {
+  const students = DB.getStudents().filter(s => s.classId === +journalState.classId);
+  const subjects = DB.getSubjects();
+  students.forEach(s => subjects.forEach(sub => GRADE_TYPES.forEach(ty => {
+    journalState.draft[`${s.id}|${sub}|${ty}`] = value;
+  })));
+  saveDraft();
+  renderJournal();
+}
+function clearAll() { journalState.draft = {}; saveDraft(); renderJournal(); }
+
+function saveJournalGrades() {
+  if (!journalState.classId) { showToast('Выберите класс', 'error'); return; }
+  const students = DB.getStudents().filter(s => s.classId === +journalState.classId);
+  const entries = Object.entries(journalState.draft);
+  if (!entries.length) { showToast('Нет оценок', 'error'); return; }
+  UndoStack.push(`Сохранение оценок (${entries.length})`);
+  let added = 0, updated = 0;
+  const d = DB.load();
+  const subjects = DB.getSubjects();
+  entries.forEach(([key, value]) => {
+    const [sidStr, subject, type] = key.split('|');
+    const sid = +sidStr;
+    if (!students.some(s => s.id === sid)) return;
+    if (!GRADE_TYPES.includes(type) || !subjects.includes(subject)) return;
+    const idx = d.grades.findIndex(g => g.studentId === sid && g.subject === subject
+      && g.period === journalState.period && g.type === type);
+    if (idx >= 0) { d.grades[idx].value = value; updated++; }
+    else {
+      d.grades.push({ id: d.nextIds.grade++, studentId: sid, subject,
+        period: journalState.period, type, value, year: '2024-2025' });
+      added++;
+    }
+  });
+  DB.save();
+  clearDraft();
+  showToast(`Добавлено: ${added}, обновлено: ${updated}`, 'success');
+  renderJournal();
+}
+
+/* ---------- CSV / Excel импорт и экспорт ---------- */
+function downloadCSV(filename, content) {
+  const BOM = '\uFEFF';
+  const blob = new Blob([BOM + content], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function downloadStudentsTemplate() {
+  const rows = [
+    ['Фамилия', 'Имя', 'Отчество', 'Дата рождения (ГГГГ-ММ-ДД)'],
+    ['Иванов', 'Иван', 'Иванович', '2012-05-12'],
+    ['Петрова', 'Анна', 'Сергеевна', '2012-07-22'],
+  ];
+  downloadCSV(`Шаблон_учеников_${todayStr()}.csv`, rows.map(r => r.join(';')).join('\n'));
+}
+
+function downloadGradesTemplate() {
+  const students = DB.getStudents().filter(s => s.classId === +journalState.classId)
+    .sort((a,b) => a.lastName.localeCompare(b.lastName, 'ru'));
+  const subjects = DB.getSubjects();
+  const header = ['ФИО'];
+  subjects.forEach(sub => { header.push(`${sub} [текущая]`, `${sub} [промежуточная]`, `${sub} [итоговая]`); });
+  const rows = [header];
+  students.forEach(s => {
+    const row = [`${s.lastName} ${s.firstName} ${s.middleName || ''}`.trim()];
+    subjects.forEach(sub => {
+      const g1 = DB.getGrades().find(g => g.studentId === s.id && g.subject === sub && g.period === journalState.period && g.type === 'текущая');
+      const g2 = DB.getGrades().find(g => g.studentId === s.id && g.subject === sub && g.period === journalState.period && g.type === 'промежуточная');
+      const g3 = DB.getGrades().find(g => g.studentId === s.id && g.subject === sub && g.period === journalState.period && g.type === 'итоговая');
+      row.push(g1 ? g1.value : '', g2 ? g2.value : '', g3 ? g3.value : '');
+    });
+    rows.push(row);
+  });
+  downloadCSV(`Шаблон_оценок.csv`, rows.map(r => r.join(';')).join('\n'));
+}
+
+function openStudentsPasteModal() {
+  const classes = DB.getClasses();
+  if (!classes.length) { showToast('Создайте класс', 'error'); return; }
+  const defaultClassId = studentFilter.classId || classes[0].id;
+  showModal(`
+    <h2>Вставка учеников</h2>
+    <div class="alert alert-info">Формат: <b>Фамилия; Имя; Отчество; [Дата]</b></div>
+    <div class="form-grid mb-16">
+      <div class="form-group"><label>Класс</label>
+        <select id="paste_class">
+          ${classes.map(c => `<option value="${c.id}" ${c.id===defaultClassId?'selected':''}>${esc(c.name)}</option>`).join('')}
+        </select></div>
+    </div>
+    <div class="form-group mb-16">
+      <textarea id="pasteStudentsArea" class="paste-area" placeholder="Иванов Иван Иванович"></textarea>
+    </div>
+    <div id="pastePreview" class="mb-16"></div>
+    <div class="form-actions">
+      <button class="btn btn-primary" onclick="applyPasteStudents()">${icon('check', 14)} Добавить</button>
+      <button class="btn btn-outline" onclick="closeModal()">Отмена</button>
+    </div>
+  `);
+}
+
+function applyPasteStudents() {
+  const text = document.getElementById('pasteStudentsArea').value;
+  const classId = +document.getElementById('paste_class').value;
+  const parsed = parseStudentsText(text);
+  if (!parsed.length) { showToast('Нет данных', 'error'); return; }
+  UndoStack.push(`Добавление ${parsed.length} учеников`);
+  parsed.forEach(p => {
+    DB.addStudent({ lastName: p.lastName, firstName: p.firstName,
+      middleName: p.middleName, birthDate: p.birthDate || '', classId });
+  });
+  closeModal();
+  showToast(`Добавлено: ${parsed.length}`, 'success');
+  render();
+}
+
+function parseStudentsText(text) {
+  const lines = text.replace(/\r/g, '').split('\n').filter(l => l.trim());
+  const result = [];
+  lines.forEach((line, idx) => {
+    const parts = line.split(/\t|;|,/).map(x => x.trim()).filter(Boolean);
+    if (!parts.length) return;
+    const isHeader = idx === 0 && parts.some(p => /фамил|имя|отчество|дата|фио/i.test(p));
+    if (isHeader) return;
+    let lastName = '', firstName = '', middleName = '', birthDate = '';
+    if (parts.length === 1) {
+      const fio = parts[0].split(/\s+/);
+      lastName = fio[0] || ''; firstName = fio[1] || ''; middleName = fio[2] || '';
+    } else {
+      lastName = parts[0] || ''; firstName = parts[1] || ''; middleName = parts[2] || '';
+      if (parts[3]) birthDate = normalizeDate(parts[3]);
+    }
+    if (!lastName) return;
+    result.push({ lastName, firstName, middleName, birthDate });
+  });
+  return result;
+}
+
+function normalizeDate(s) {
+  if (!s) return '';
+  s = String(s).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const m = s.match(/^(\d{1,2})[./](\d{1,2})[./](\d{4})$/);
+  if (m) return `${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`;
+  return '';
+}
+
+function openStudentsCsvModal() { openCsvModal('students'); }
+function openGradesCsvModal() { openCsvModal('grades'); }
+
+function openCsvModal(mode) {
+  const isGrades = mode === 'grades';
+  showModal(`
+    <h2>${isGrades ? 'Импорт оценок' : 'Импорт учеников'} из CSV</h2>
+    <div class="alert alert-info">1. Скачать шаблон → 2. Заполнить в Excel → 3. Загрузить CSV (UTF-8)</div>
+    <div class="row-flex mb-16" style="gap:10px;">
+      <button class="btn btn-success btn-sm" onclick="${isGrades ? 'downloadGradesTemplate()' : 'downloadStudentsTemplate()'}">
+        ${icon('download', 14)} Скачать шаблон
+      </button>
+    </div>
+    <div class="form-group mb-16">
+      <input type="file" id="csvFile" accept=".csv,text/csv">
+    </div>
+    <div class="form-actions">
+      <button class="btn btn-primary" onclick="applyCsv('${mode}')">${icon('upload', 14)} Применить</button>
+      <button class="btn btn-outline" onclick="closeModal()">Отмена</button>
+    </div>
+  `);
+}
+
+function readCsvFile() {
+  return new Promise((resolve) => {
+    const file = document.getElementById('csvFile')?.files?.[0];
+    if (!file) { resolve(null); return; }
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.readAsText(file, 'UTF-8');
+  });
+}
+
+async function applyCsv(mode) {
+  const text = await readCsvFile();
+  if (!text) { showToast('Выберите файл', 'error'); return; }
+  if (mode === 'students') applyCsvStudents(text);
+  else applyCsvGradesAll(text);
+}
+
+function applyCsvStudents(text) {
+  const classes = DB.getClasses();
+  if (!classes.length) { showToast('Создайте класс', 'error'); return; }
+  const classId = +prompt(`ID класса:\n${classes.map(c => `${c.id} — ${c.name}`).join('\n')}`, classes[0].id);
+  if (!classId || !classes.some(c => c.id === classId)) { showToast('Неверный класс', 'error'); return; }
+  const parsed = parseStudentsText(text);
+  if (!parsed.length) { showToast('Не распознано', 'error'); return; }
+  UndoStack.push(`Импорт ${parsed.length} учеников`);
+  parsed.forEach(p => {
+    DB.addStudent({ lastName: p.lastName, firstName: p.firstName,
+      middleName: p.middleName, birthDate: p.birthDate || '', classId });
+  });
+  closeModal();
+  showToast(`Импортировано: ${parsed.length}`, 'success');
+  render();
+}
+
+function applyCsvGradesAll(text) {
+  const students = DB.getStudents().filter(s => s.classId === +journalState.classId)
+    .sort((a,b) => a.lastName.localeCompare(b.lastName, 'ru'));
+  if (!students.length) { showToast('Нет учеников', 'error'); return; }
+  const lines = text.replace(/\r/g, '').split('\n').filter(l => l.trim() !== '');
+  if (lines.length < 2) { showToast('Файл пуст', 'error'); return; }
+  const headerCols = lines[0].split(/[;\t,]/).map(x => x.trim());
+  const subjectColumns = [];
+  for (let i = 1; i < headerCols.length; i++) {
+    const m = headerCols[i].match(/^(.+?)\s*\[(.+?)\]$/);
+    if (m && GRADE_TYPES.includes(m[2].trim())) {
+      subjectColumns.push({ subject: m[1].trim(), type: m[2].trim(), colIndex: i });
+    }
+  }
+  if (!subjectColumns.length) { showToast('Не распознаны колонки', 'error'); return; }
+  let applied = 0;
+  for (let li = 1; li < lines.length; li++) {
+    const cols = lines[li].split(/[;\t,]/).map(x => x.trim());
+    if (!cols[0]) continue;
+    const fioSearch = cols[0].toLowerCase();
+    const student = students.find(s => {
+      const f1 = `${s.lastName} ${s.firstName} ${s.middleName || ''}`.toLowerCase().trim();
+      return f1 === fioSearch || f1.startsWith(fioSearch);
+    });
+    if (!student) continue;
+    subjectColumns.forEach(sc => {
+      const v = cols[sc.colIndex] || '';
+      const k = `${student.id}|${sc.subject}|${sc.type}`;
+      if (v === '') delete journalState.draft[k];
+      else journalState.draft[k] = v;
+    });
+    applied++;
+  }
+  saveDraft();
+  closeModal();
+  renderJournal();
+  showToast(`Применено: ${applied}`, 'success');
+}
+
+/* ---------- Архив (исправленный) ---------- */
+function openExportArchiveModal() {
+  showModal(`
+    <h2>${icon('download', 20)} Экспорт данных</h2>
+    <div class="form-group mb-16">
+      <label>Что выгрузить</label>
+      <div class="radio-group" style="flex-direction:column;">
+        <label><input type="checkbox" id="exp_students" checked> Ученики (XLSX)</label>
+        <label><input type="checkbox" id="exp_grades" checked> Оценки учеников (XLSX)</label>
+        <label><input type="checkbox" id="exp_classes" checked> Классы (XLSX)</label>
+        <label><input type="checkbox" id="exp_teachers" checked> Учителя (XLSX)</label>
+        <label><input type="checkbox" id="exp_heatmap" checked> Тепловая карта (XLSX)</label>
+        <label><input type="checkbox" id="exp_risks" checked> Риски (XLSX)</label>
+        <label><input type="checkbox" id="exp_backup" checked> Полная резервная копия (JSON)</label>
+      </div>
+    </div>
+    <div class="form-actions">
+      <button class="btn btn-primary" onclick="doExportArchive()">${icon('download', 14)} Скачать</button>
+      <button class="btn btn-outline" onclick="closeModal()">Отмена</button>
+    </div>
+  `);
+}
+
+function doExportArchive() {
+  const checks = {
+    students: document.getElementById('exp_students')?.checked,
+    grades: document.getElementById('exp_grades')?.checked,
+    classes: document.getElementById('exp_classes')?.checked,
+    teachers: document.getElementById('exp_teachers')?.checked,
+    heatmap: document.getElementById('exp_heatmap')?.checked,
+    risks: document.getElementById('exp_risks')?.checked,
+    backup: document.getElementById('exp_backup')?.checked,
+  };
+  let i = 0;
+  const delay = (fn) => setTimeout(fn, (i++) * 700);
+
+  if (checks.students) delay(() => typeof exportStudentsXLSX === 'function' && exportStudentsXLSX());
+  if (checks.grades) delay(() => {
+    const students = allowedStudents().slice(0, 5);
+    students.forEach((s, idx) => setTimeout(() => exportStudentXLSX(s.id), idx * 400));
+  });
+  if (checks.classes) delay(() => typeof exportAnalyticsXLSX === 'function' && exportAnalyticsXLSX());
+  if (checks.teachers) delay(() => typeof exportTeachersXLSX === 'function' && exportTeachersXLSX());
+  if (checks.heatmap) delay(() => typeof exportHeatmapXLSX === 'function' && exportHeatmapXLSX());
+  if (checks.risks) delay(() => typeof exportRisksXLSX === 'function' && exportRisksXLSX());
+  if (checks.backup) delay(() => downloadBackupJSON());
+
+  closeModal();
+  showToast('Экспорт запущен', 'success');
+}
+
+/* ---------- Автоотчёты (исправленный) ---------- */
+function openAutoReportsModal() {
+  const cfg = DB.getAutoReports();
+  showModal(`
+    <h2>${icon('mail', 20)} Автоматические отчёты</h2>
+    <div class="alert alert-info">${icon('info', 14)} Отчёт формируется как письмо и открывается в вашем почтовом клиенте.</div>
+    <div class="form-group mb-16">
+      <label>Email получателя</label>
+      <input id="ar_email" type="email" value="${esc(cfg.email || '')}" placeholder="director@school.ru">
+    </div>
+    <div class="form-group mb-16">
+      <label>Расписание</label>
+      <select id="ar_schedule">
+        <option value="weekly" ${cfg.schedule==='weekly'?'selected':''}>Раз в неделю</option>
+        <option value="monthly" ${cfg.schedule==='monthly'?'selected':''}>Раз в месяц</option>
+        <option value="quarterly" ${cfg.schedule==='quarterly'?'selected':''}>Раз в четверть</option>
+      </select>
+    </div>
+    <div class="form-group mb-16">
+      <label><input type="checkbox" id="ar_enabled" ${cfg.enabled?'checked':''}> Включить автоотправку</label>
+    </div>
+    <div class="form-actions">
+      <button class="btn btn-primary" onclick="saveAutoReports()">${icon('save', 14)} Сохранить</button>
+      <button class="btn btn-outline" onclick="sendReportNow()">${icon('mail', 14)} Отправить сейчас</button>
+      <button class="btn btn-outline" onclick="closeModal()">Отмена</button>
+    </div>
+  `);
+}
+
+function saveAutoReports() {
+  const email = document.getElementById('ar_email').value.trim();
+  const schedule = document.getElementById('ar_schedule').value;
+  const enabled = document.getElementById('ar_enabled').checked;
+  DB.setAutoReports({ email, schedule, enabled });
+  showToast('Настройки сохранены', 'success');
+  closeModal();
+  render();
+}
+
+function sendReportNow() {
+  const cfg = DB.getAutoReports();
+  const email = document.getElementById('ar_email')?.value.trim() || cfg.email;
+  if (!email) { showToast('Укажите email', 'error'); return; }
+
+  const classes = allowedClasses();
+  const students = allowedStudents();
+  const subjects = usedSubjects();
+  let text = 'Аналитический отчёт\n\n' + new Date().toLocaleString('ru-RU') + '\n\n';
+  classes.forEach(c => {
+    const sts = students.filter(s => s.classId === c.id);
+    let sum = 0, cnt = 0;
+    sts.forEach(s => subjects.forEach(sub => {
+      const v = finalGrade(s.id, sub);
+      if (/^[2-5]$/.test(v)) { sum += +v; cnt++; }
+    }));
+    const avg = cnt ? (sum/cnt).toFixed(2) : '—';
+    text += `Класс ${c.name}: ${sts.length} учеников, средний балл ${avg}\n`;
+  });
+
+  const subject = encodeURIComponent('Аналитический отчёт — ' + new Date().toLocaleDateString('ru-RU'));
+  const body = encodeURIComponent(text);
+  window.location.href = `mailto:${email}?subject=${subject}&body=${body}`;
+  DB.setAutoReports({ ...cfg, lastSent: new Date().toISOString() });
+  showToast('Открыто письмо в почтовом клиенте', 'success');
+  closeModal();
+}
+
+/* ---------- Бэкапы ---------- */
+function downloadBackupJSON() {
+  const json = DB.exportAll();
+  const blob = new Blob([json], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `school_analytics_backup_${todayStr()}.json`;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  showToast('Резервная копия скачана', 'success');
+}
+
+/* ---------- PDF / Excel экспорт в учительской карточке ---------- */
+function exportTeacherCard(id) {
+  const t = DB.getSubjectTeachersList().find(x => x.id === id);
+  if (!t) { showToast('Учитель не найден', 'error'); return; }
+
+  const classes = allowedClasses();
+  const students = allowedStudents();
+  const assignments = DB.getSubjectTeachers().filter(st => st.teacherId === id
+    && classes.some(c => c.id === st.classId));
+
+  let totalSum = 0, totalCnt = 0;
+  const dist = {'5':0,'4':0,'3':0,'2':0};
+  const perSubject = {};
+
+  assignments.forEach(a => {
+    if (!perSubject[a.subject]) perSubject[a.subject] = { sum: 0, cnt: 0, classes: [] };
+    const classObj = DB.getClasses().find(c => c.id === a.classId);
+    const sts = students.filter(s => s.classId === a.classId);
+    let sum = 0, cnt = 0;
+    sts.forEach(s => {
+      DB.getGrades().filter(g => g.studentId === s.id && g.subject === a.subject && /^[2-5]$/.test(g.value))
+        .forEach(g => { sum += +g.value; cnt++; totalSum += +g.value; totalCnt++; dist[g.value]++; });
+    });
+    perSubject[a.subject].sum += sum;
+    perSubject[a.subject].cnt += cnt;
+    if (classObj) perSubject[a.subject].classes.push(classObj.name);
+  });
+
+  const overallAvg = totalCnt ? (totalSum / totalCnt).toFixed(2) : '—';
+
+  let html = `<h1>Карточка учителя</h1><h2>${esc(t.name)}</h2>
+    <table class="info-table">
+      <tr><td>Уровень МЦКО:</td><td>${esc(t.mckoLevel || 'нет')}</td></tr>
+      <tr><td>Дата МЦКО:</td><td>${esc(t.mckoDate ? fmtDate(t.mckoDate) : '—')}</td></tr>
+      <tr><td>Всего оценок:</td><td>${totalCnt}</td></tr>
+      <tr><td>Средний балл:</td><td><b>${overallAvg}</b></td></tr>
+    </table>
+
+    <h3>По предметам</h3>
+    <table><thead><tr><th class="left">Предмет</th><th>Классы</th><th>Оценок</th><th>Ср. балл</th></tr></thead>
+    <tbody>${Object.entries(perSubject).map(([sub, d]) => {
+      const avg = d.cnt ? (d.sum/d.cnt).toFixed(2) : '—';
+      return `<tr><td class="left">${esc(sub)}</td><td>${esc(d.classes.join(', '))}</td><td>${d.cnt}</td><td>${avg}</td></tr>`;
+    }).join('')}</tbody></table>`;
+
+  const notes = t.notes || [];
+  if (notes.length) {
+    html += `<h3>Замечания</h3>`;
+    notes.forEach(n => {
+      html += `<div class="note"><div class="note-meta"><b>${esc(fmtDate(n.date))}</b> · ${esc(n.author || '')}</div>${esc(n.text)}</div>`;
+    });
+  }
+
+  html += `<div class="sig">
+      <div>Администратор: ___________________ / ${esc(SESSION.name)}</div>
+      <div>Дата: «____» ____________ 20___ г.</div>
+    </div>`;
+  exportPDF(html, 'Карточка учителя — ' + t.name);
+}
+
+/* ---------- Характеристика учителя ---------- */
+function printTeacherCharacteristic(id) {
+  const t = DB.getSubjectTeachersList().find(x => x.id === id);
+  if (!t) { showToast('Учитель не найден', 'error'); return; }
+
+  const classes = allowedClasses();
+  const students = allowedStudents();
+  const assignments = DB.getSubjectTeachers().filter(st => st.teacherId === id
+    && classes.some(c => c.id === st.classId));
+
+  let totalSum = 0, totalCnt = 0;
+  const dist = {'5':0,'4':0,'3':0,'2':0};
+  const subjectsSet = new Set(), classesSet = new Set(), studentSet = new Set();
+
+  assignments.forEach(a => {
+    subjectsSet.add(a.subject);
+    classesSet.add(a.classId);
+    students.filter(s => s.classId === a.classId).forEach(s => {
+      studentSet.add(s.id);
+      DB.getGrades().filter(g => g.studentId === s.id && g.subject === a.subject && /^[2-5]$/.test(g.value))
+        .forEach(g => { totalSum += +g.value; totalCnt++; dist[g.value]++; });
+    });
+  });
+
+  const overallAvg = totalCnt ? (totalSum / totalCnt).toFixed(2) : '—';
+  const qualityPercent = totalCnt ? Math.round((dist['5'] + dist['4']) / totalCnt * 100) : 0;
+
+  let html = `<h1 style="text-align:center;">ХАРАКТЕРИСТИКА</h1>
+    <h2 style="text-align:center;">учителя-предметника</h2>
+    <p style="text-align:center;font-size:12pt;margin:16px 0 24px;"><b>${esc(t.name)}</b></p>
+
+    <table class="info-table">
+      <tr><td>ФИО:</td><td>${esc(t.name)}</td></tr>
+      <tr><td>Предметы:</td><td>${esc([...subjectsSet].join(', ') || '—')}</td></tr>
+      <tr><td>Классы:</td><td>${esc([...classesSet].map(cid => DB.getClasses().find(c => c.id === cid)?.name || '').filter(Boolean).join(', ') || '—')}</td></tr>
+      <tr><td>Обучающихся:</td><td>${studentSet.size}</td></tr>
+      <tr><td>Уровень МЦКО:</td><td><b>${esc(t.mckoLevel || 'нет')}</b></td></tr>
+    </table>
+
+    <h3>Показатели</h3>
+    <table><tbody>
+      <tr><td class="left">Всего оценок</td><td>${totalCnt}</td></tr>
+      <tr><td class="left">Средний балл</td><td><b>${overallAvg}</b></td></tr>
+      <tr><td class="left">Отлично «5»</td><td>${dist['5']}</td></tr>
+      <tr><td class="left">Хорошо «4»</td><td>${dist['4']}</td></tr>
+      <tr><td class="left">Удовлетворительно «3»</td><td>${dist['3']}</td></tr>
+      <tr><td class="left">Неудовлетворительно «2»</td><td>${dist['2']}</td></tr>
+      <tr><td class="left">Качество знаний</td><td><b>${qualityPercent}%</b></td></tr>
+    </tbody></table>
+
+    <h3>Выводы</h3>
+    <p style="font-size:11pt;line-height:1.5;text-align:justify;">
+      Учитель ${esc(t.name)} ведёт преподавание предметов «${esc([...subjectsSet].join(', ') || '—')}»
+      в ${esc([...classesSet].map(cid => DB.getClasses().find(c => c.id === cid)?.name || '').filter(Boolean).join(', '))} классах.
+      Аттестовано ${studentSet.size} обучающихся. Средний балл <b>${overallAvg}</b>, качество знаний <b>${qualityPercent}%</b>.
+      ${qualityPercent >= 75 ? 'Качество знаний выше среднего.' : qualityPercent >= 50 ? 'Качество знаний соответствует среднему уровню.' : 'Рекомендовано усилить работу с неуспевающими.'}
+    </p>
+
+    <div class="sig" style="margin-top:60px;">
+      <div>
+        <b>Директор школы:</b><br><br>
+        _______________________ / ______________________<br>
+        <span style="font-size:9pt;color:#555;">(подпись)                              (расшифровка)</span>
+      </div>
+      <div>
+        <b>Дата:</b> «____» ____________ ${new Date().getFullYear()} г.<br><br>
+        <b>М.П.</b>
+      </div>
+    </div>
+
+    <div class="sig" style="margin-top:40px;">
+      <div>
+        <b>С характеристикой ознакомлен(а):</b><br><br>
+        _______________________ / ${esc(t.name)}<br>
+        <span style="font-size:9pt;color:#555;">(подпись)                              (расшифровка)</span>
+      </div>
+      <div style="text-align:right;">«____» ____________ ${new Date().getFullYear()} г.</div>
+    </div>`;
+  exportPDF(html, 'Характеристика — ' + t.name);
+}
+
+/* ---------- Карточка учителя (полная) ---------- */
+function renderTeacherDetail(id) {
+  if (SESSION.role !== 'admin' && SESSION.role !== 'director') { go('dashboard'); return; }
+  const teacher = DB.getSubjectTeachersList().find(t => t.id === id);
+  if (!teacher) {
+    page('<div class="card"><div class="empty">Учитель не найден</div></div>', 'subject-teachers');
+    return;
+  }
+
+  const classes = allowedClasses();
+  const students = allowedStudents();
+  const assignments = DB.getSubjectTeachers().filter(st => st.teacherId === id
+    && classes.some(c => c.id === st.classId));
+
+  let totalSum = 0, totalCnt = 0;
+  const dist = {'5':0,'4':0,'3':0,'2':0};
+  const perSubject = {};
+
+  assignments.forEach(a => {
+    if (!perSubject[a.subject]) perSubject[a.subject] = { sum: 0, cnt: 0, classes: [] };
+    const classObj = DB.getClasses().find(c => c.id === a.classId);
+    const sts = students.filter(s => s.classId === a.classId);
+    let sum = 0, cnt = 0;
+    sts.forEach(s => {
+      DB.getGrades().filter(g => g.studentId === s.id && g.subject === a.subject && /^[2-5]$/.test(g.value))
+        .forEach(g => { sum += +g.value; cnt++; totalSum += +g.value; totalCnt++; dist[g.value]++; });
+    });
+    perSubject[a.subject].sum += sum;
+    perSubject[a.subject].cnt += cnt;
+    if (classObj) perSubject[a.subject].classes.push(classObj.name);
+  });
+
+  const overallAvg = totalCnt ? (totalSum / totalCnt).toFixed(2) : '—';
+
+  const notes = teacher.notes || [];
+  const canEdit = SESSION.role === 'admin';
+
+  page(`
+    <div class="card">
+      <div class="row-flex" style="justify-content:space-between;align-items:flex-start;gap:12px;">
+        <div style="flex:1;min-width:0;">
+          <h2 style="margin-bottom:8px;">${icon('user', 24)} ${esc(teacher.name)}</h2>
+          <span class="badge ${MCKO_CLASS[teacher.mckoLevel || 'нет']}" style="font-size:14px;">
+            МЦКО: ${esc(teacher.mckoLevel || 'нет')}
+          </span>
+          ${teacher.mckoDate ? `<span class="muted" style="margin-left:8px;">от ${esc(fmtDate(teacher.mckoDate))}</span>` : ''}
+        </div>
+        <div class="btn-group">
+          <button class="btn btn-outline btn-sm" onclick="go('subject-teachers')">${icon('close', 14)} Назад</button>
+          <button class="btn btn-success btn-sm" onclick="exportTeacherCard(${id})">${icon('file-pdf', 14)} PDF</button>
+          <button class="btn btn-warn btn-sm" onclick="printTeacherCharacteristic(${id})">${icon('file-pdf', 14)} Характеристика</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="stats-grid">
+      <div class="stat-card"><div class="num">${assignments.length}</div><div class="lbl">Назначений</div></div>
+      <div class="stat-card"><div class="num">${Object.keys(perSubject).length}</div><div class="lbl">Предметов</div></div>
+      <div class="stat-card"><div class="num">${totalCnt}</div><div class="lbl">Оценок</div></div>
+      <div class="stat-card"><div class="num">${overallAvg}</div><div class="lbl">Средний балл</div></div>
+    </div>
+
+    <div class="card">
+      <h3>Назначения</h3>
+      ${Object.keys(perSubject).length ? `<div class="table-wrap"><table>
+        <thead><tr><th>Предмет</th><th>Классы</th><th class="text-right">Оценок</th><th class="text-right">Ср. балл</th></tr></thead>
+        <tbody>${Object.entries(perSubject).map(([sub, d]) => {
+          const avg = d.cnt ? (d.sum/d.cnt).toFixed(2) : '—';
+          return `<tr><td><b>${esc(sub)}</b></td><td>${d.classes.map(c => `<span class="badge badge-blue">${esc(c)}</span>`).join(' ')}</td>
+            <td class="text-right">${d.cnt}</td><td class="text-right">${avg}</td></tr>`;
+        }).join('')}</tbody>
+      </table></div>` : '<div class="empty">Нет назначений</div>'}
+    </div>
+
+    <div class="card">
+      <div class="row-flex" style="justify-content:space-between;margin-bottom:14px;">
+        <h3 style="margin:0;">${icon('edit', 18)} Замечания</h3>
+        ${canEdit ? `<button class="btn btn-primary btn-sm" onclick="openAddNoteModal(${id})">${icon('plus', 14)} Добавить</button>` : ''}
+      </div>
+      ${notes.length ? `<div class="table-wrap"><table>
+        <thead><tr><th>Дата</th><th>Автор</th><th>Замечание</th>${canEdit?'<th></th>':''}</tr></thead>
+        <tbody>${notes.map(n => `<tr>
+          <td class="nowrap">${esc(fmtDate(n.date))}</td>
+          <td>${esc(n.author || '—')}</td>
+          <td>${esc(n.text)}</td>
+          ${canEdit ? `<td class="text-right"><button class="btn btn-danger btn-sm btn-icon" onclick="delTeacherNote(${id},${n.id})">${icon('trash', 12)}</button></td>` : ''}
+        </tr>`).join('')}</tbody>
+      </table></div>` : '<div class="empty">Замечаний нет</div>'}
+    </div>
+  `, 'subject-teachers');
+}
+
+function openAddNoteModal(teacherId) {
+  showModal(`
+    <h2>${icon('edit', 20)} Добавить замечание</h2>
+    <div class="form-group mb-16">
+      <label>Текст</label>
+      <textarea id="note_text" rows="5" style="padding:10px;border:1px solid var(--border-strong);border-radius:8px;font-family:inherit;background:var(--bg-input);color:var(--text);resize:vertical;"></textarea>
+    </div>
+    <div class="form-actions">
+      <button class="btn btn-primary" onclick="saveNewNote(${teacherId})">${icon('save', 14)} Добавить</button>
+      <button class="btn btn-outline" onclick="closeModal()">Отмена</button>
+    </div>
+  `);
+  setTimeout(() => document.getElementById('note_text')?.focus(), 100);
+}
+
+function saveNewNote(teacherId) {
+  const text = document.getElementById('note_text').value.trim();
+  if (!text) { showToast('Введите текст', 'error'); return; }
+  UndoStack.push('Добавление замечания');
+  DB.addNote(teacherId, text, SESSION.name);
+  closeModal();
+  showToast('Замечание добавлено', 'success');
+  render();
+}
+
+function delTeacherNote(teacherId, noteId) {
+  if (!confirm('Удалить замечание?')) return;
+  UndoStack.push('Удаление замечания');
+  DB.deleteNote(teacherId, noteId);
+  render();
+}
+
+/* ============================================================
+   Переинициализация роутера — теперь все функции есть
+   ============================================================ */
+// Пере-рендер, чтобы активировать новые реализации
+window.addEventListener('load', function() {
+  setTimeout(function() { render(); }, 100);
+});
+</script>
 </body>
 </html>
