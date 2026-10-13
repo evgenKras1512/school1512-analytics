@@ -4685,5 +4685,269 @@ window.addEventListener('load', function() {
   setTimeout(function() { render(); }, 100);
 });
 </script>
+  <script>
+/* ============================================================
+   FIX v5.2 — Роутер + карточка учителя
+   Перезаписывает заглушку renderStub для маршрута 'teacher'
+   ============================================================ */
+
+/* ---------- Карточка учителя ---------- */
+function renderTeacherDetail(id) {
+  if (SESSION.role !== 'admin' && SESSION.role !== 'director') { go('dashboard'); return; }
+  const teacher = DB.getSubjectTeachersList().find(t => t.id === id);
+  if (!teacher) {
+    page('<div class="card"><div class="empty">Учитель не найден</div></div>', 'subject-teachers');
+    return;
+  }
+
+  const classes = allowedClasses();
+  const students = allowedStudents();
+  const assignments = DB.getSubjectTeachers().filter(st => st.teacherId === id
+    && classes.some(c => c.id === st.classId));
+
+  let totalSum = 0, totalCnt = 0;
+  const dist = {'5':0,'4':0,'3':0,'2':0};
+  const perSubject = {};
+
+  assignments.forEach(a => {
+    if (!perSubject[a.subject]) perSubject[a.subject] = { sum: 0, cnt: 0, classes: [] };
+    const classObj = DB.getClasses().find(c => c.id === a.classId);
+    const sts = students.filter(s => s.classId === a.classId);
+    let sum = 0, cnt = 0;
+    sts.forEach(s => {
+      DB.getGrades().filter(g => g.studentId === s.id && g.subject === a.subject && /^[2-5]$/.test(g.value))
+        .forEach(g => { sum += +g.value; cnt++; totalSum += +g.value; totalCnt++; dist[g.value]++; });
+    });
+    perSubject[a.subject].sum += sum;
+    perSubject[a.subject].cnt += cnt;
+    if (classObj) perSubject[a.subject].classes.push(classObj.name);
+  });
+
+  const overallAvg = totalCnt ? (totalSum / totalCnt).toFixed(2) : '—';
+  const avgClass = overallAvg !== '—'
+    ? (+overallAvg >= 4.5 ? 'badge-green' : +overallAvg >= 3.5 ? 'badge-blue' : +overallAvg >= 2.5 ? 'badge-orange' : 'badge-red')
+    : 'badge-gray';
+
+  const subjectRows = Object.entries(perSubject).map(([sub, data]) => {
+    const avg = data.cnt ? (data.sum / data.cnt).toFixed(2) : '—';
+    const cls = data.cnt
+      ? (+avg >= 4.5 ? 'badge-green' : +avg >= 3.5 ? 'badge-blue' : +avg >= 2.5 ? 'badge-orange' : 'badge-red')
+      : 'badge-gray';
+    return `<tr>
+      <td><b>${esc(sub)}</b></td>
+      <td>${data.classes.map(c => `<span class="badge badge-blue">${esc(c)}</span>`).join(' ')}</td>
+      <td class="text-right">${data.cnt}</td>
+      <td class="text-right"><span class="badge ${cls}">${avg}</span></td>
+    </tr>`;
+  }).join('');
+
+  const notes = teacher.notes || [];
+  const notesRows = notes.map(n => `
+    <tr>
+      <td class="nowrap">${esc(fmtDate(n.date))}</td>
+      <td>${esc(n.author || '—')}</td>
+      <td>${esc(n.text)}</td>
+      <td class="text-right">
+        <button class="btn btn-danger btn-sm btn-icon" onclick="delTeacherNote(${id},${n.id})" title="Удалить">${icon('trash', 12)}</button>
+      </td>
+    </tr>
+  `).join('');
+
+  const canEdit = SESSION.role === 'admin';
+
+  page(`
+    <div class="card">
+      <div class="row-flex" style="justify-content:space-between;align-items:flex-start;gap:12px;">
+        <div style="flex:1;min-width:0;">
+          <h2 style="margin-bottom:8px;font-size:22px;">${icon('user', 22)} ${esc(teacher.name)}</h2>
+          <div class="row-flex" style="gap:8px;">
+            <span class="badge ${MCKO_CLASS[teacher.mckoLevel || 'нет']}" style="font-size:14px;">
+              МЦКО: ${esc(teacher.mckoLevel || 'нет')}
+            </span>
+            ${teacher.mckoDate ? `<span class="muted">от ${esc(fmtDate(teacher.mckoDate))}</span>` : ''}
+          </div>
+        </div>
+        <div class="btn-group">
+          <button class="btn btn-outline btn-sm" onclick="go('subject-teachers')" title="Назад">
+            ${icon('close', 14)} Назад
+          </button>
+          <button class="btn btn-success btn-sm" onclick="exportTeacherCard(${id})" title="Экспорт в PDF">
+            ${icon('file-pdf', 14)} PDF карточки
+          </button>
+          <button class="btn btn-warn btn-sm" onclick="printTeacherCharacteristic(${id})" title="Характеристика для аттестации">
+            ${icon('file-pdf', 14)} Характеристика
+          </button>
+          ${canEdit ? `<button class="btn btn-primary btn-sm" onclick="openEditTeacherModal(${id})" title="Редактировать">
+            ${icon('edit', 14)}
+          </button>` : ''}
+        </div>
+      </div>
+    </div>
+
+    <div class="stats-grid">
+      <div class="stat-card"><div class="num">${assignments.length}</div><div class="lbl">Назначений</div></div>
+      <div class="stat-card"><div class="num">${Object.keys(perSubject).length}</div><div class="lbl">Предметов</div></div>
+      <div class="stat-card"><div class="num">${totalCnt}</div><div class="lbl">Оценок всего</div></div>
+      <div class="stat-card" style="border-left-color:${overallAvg !== '—' && +overallAvg >= 3.5 ? 'var(--success)' : 'var(--warning)'};">
+        <div class="num" style="color:${overallAvg !== '—' && +overallAvg >= 3.5 ? 'var(--success)' : 'var(--warning)'};">${overallAvg}</div>
+        <div class="lbl">Средний балл</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>${icon('bar-chart', 18)} Средний балл по предметам</h2>
+      <div class="chart-box"><canvas id="teacherSubjects"></canvas></div>
+    </div>
+
+    <div class="card">
+      <h2>${icon('chart', 18)} Распределение оценок</h2>
+      <div class="chart-box"><canvas id="teacherDist"></canvas></div>
+    </div>
+
+    <div class="card">
+      <h2>${icon('grid', 18)} Назначения по предметам</h2>
+      ${subjectRows ? `<div class="table-wrap"><table>
+        <thead><tr><th>Предмет</th><th>Классы</th><th class="text-right">Оценок</th><th class="text-right">Ср. балл</th></tr></thead>
+        <tbody>${subjectRows}</tbody></table></div>` : '<div class="empty">Нет назначений</div>'}
+    </div>
+
+    <div class="card">
+      <div class="row-flex" style="justify-content:space-between;margin-bottom:14px;">
+        <h2 style="margin:0;">${icon('edit', 18)} Замечания и комментарии</h2>
+        ${canEdit ? `<button class="btn btn-primary btn-sm" onclick="openAddNoteModal(${id})" title="Добавить замечание">
+          ${icon('plus', 14)} Добавить
+        </button>` : ''}
+      </div>
+      ${notes.length ? `<div class="table-wrap"><table>
+        <thead><tr><th>Дата</th><th>Автор</th><th>Замечание</th>${canEdit?'<th></th>':''}</tr></thead>
+        <tbody>${notesRows}</tbody></table></div>`
+      : `<div class="empty">
+        <div class="empty-icon">📝</div>
+        <div>Замечаний пока нет</div>
+        ${canEdit ? `<button class="btn btn-primary btn-sm" onclick="openAddNoteModal(${id})">${icon('plus', 14)} Добавить первое замечание</button>` : ''}
+      </div>`}
+    </div>
+  `, 'subject-teachers');
+
+  requestAnimationFrame(() => {
+    drawTeacherSubjectsChart(id, perSubject);
+    drawTeacherDistChart(id, dist);
+  });
+}
+
+/* ---------- Графики карточки учителя ---------- */
+function drawTeacherSubjectsChart(teacherId, perSubject) {
+  if (typeof destroyChart === 'function') destroyChart('teacherSubjects');
+  const ctx = document.getElementById('teacherSubjects');
+  if (!ctx) return;
+  const subjects = Object.keys(perSubject);
+  const values = subjects.map(sub => perSubject[sub].cnt ? +(perSubject[sub].sum / perSubject[sub].cnt).toFixed(2) : 0);
+  const t = chartTheme();
+  charts.teacherSubjects = new Chart(ctx, {
+    type: 'bar',
+    data: { labels: subjects, datasets: [{ label: 'Ср. балл', data: values,
+      backgroundColor: values.map(v => v>=4.5?'#38a169':v>=3.5?'#3182ce':v>=2.5?'#dd6b20':'#e53e3e'),
+      borderRadius: 8 }] },
+    options: { responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: { y: { min: 0, max: 5, ticks: { stepSize: .5, font: t.font, color: t.text }, grid: { color: t.grid } },
+                x: { ticks: { font: t.font, color: t.text, maxRotation: 45 }, grid: { display: false } } } }
+  });
+}
+
+function drawTeacherDistChart(teacherId, dist) {
+  if (typeof destroyChart === 'function') destroyChart('teacherDist');
+  const ctx = document.getElementById('teacherDist');
+  if (!ctx) return;
+  const t = chartTheme();
+  charts.teacherDist = new Chart(ctx, {
+    type: 'doughnut',
+    data: { labels: ['5','4','3','2'],
+      datasets: [{ data: [dist['5'],dist['4'],dist['3'],dist['2']],
+        backgroundColor: ['#38a169','#3182ce','#dd6b20','#e53e3e'], borderWidth: 2, borderColor: '#fff' }] },
+    options: { responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { position: 'bottom', labels: { font: t.font, color: t.text } } } }
+  });
+}
+
+/* ---------- Модалка редактирования учителя ---------- */
+function openEditTeacherModal(id) {
+  const t = DB.getSubjectTeachersList().find(x => x.id === id);
+  if (!t) return;
+  showModal(`
+    <h2>${icon('edit', 20)} Редактирование учителя</h2>
+    <div class="form-grid">
+      <div class="form-group" style="grid-column:1/-1;">
+        <label>ФИО *</label>
+        <input id="et_name" value="${esc(t.name)}">
+      </div>
+      <div class="form-group">
+        <label>Уровень МЦКО</label>
+        <select id="et_mcko">
+          ${MCKO_LEVELS.map(l => `<option value="${l}" ${t.mckoLevel===l?'selected':''}>${esc(l)}</option>`).join('')}
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Дата диагностики МЦКО</label>
+        <input id="et_mcko_date" type="date" value="${esc(t.mckoDate || '')}">
+      </div>
+    </div>
+    <div class="alert alert-info mt-16">
+      <b>Уровни МЦКО:</b><br>
+      <b>экспертный</b> — высший уровень<br>
+      <b>высокий</b> — выше базового<br>
+      <b>базовый</b> — соответствует требованиям<br>
+      <b>нет</b> — диагностика не проводилась
+    </div>
+    <div class="form-actions">
+      <button class="btn btn-primary" onclick="saveTeacherEdit(${id})">${icon('save', 14)} Сохранить</button>
+      <button class="btn btn-outline" onclick="closeModal()">Отмена</button>
+    </div>
+  `);
+}
+
+function saveTeacherEdit(id) {
+  const name = document.getElementById('et_name').value.trim();
+  const mcko = document.getElementById('et_mcko').value;
+  const mckoDate = document.getElementById('et_mcko_date').value;
+  if (!name) { showToast('Укажите ФИО', 'error'); return; }
+  UndoStack.push('Редактирование учителя');
+  DB.updateSubjectTeacher(id, { name, mckoLevel: mcko, mckoDate });
+  closeModal();
+  showToast('Учитель обновлён', 'success');
+  render();
+}
+
+/* ---------- Переопределяем роутер ---------- */
+function render() {
+  DB.load();
+  if (typeof UndoStack !== 'undefined') UndoStack.load();
+  if (!SESSION) {
+    if (typeof renderLogin === 'function') renderLogin();
+    return;
+  }
+
+  const hash = location.hash.replace('#', '') || 'dashboard';
+  const [route, param] = hash.split('/');
+
+  switch (route) {
+    case 'dashboard':  renderDashboard(); break;
+    case 'students':   renderStudents(); break;
+    case 'student':    renderStudentDetail(+param); break;
+    case 'classes':    renderClasses(); break;
+    case 'analytics':  renderAnalytics(); break;
+    case 'journal':    renderJournal(); break;
+    case 'subject-teachers': renderSubjectTeachers(); break;
+    case 'teacher':    renderTeacherDetail(+param); break;
+    case 'directories': renderDirectories(); break;
+    case 'users':       renderUsers(); break;
+    case 'backup':      renderBackup(); break;
+    default: renderDashboard();
+  }
+}
+
+/* Перезапускаем рендер */
+if (SESSION) render();
+</script>
 </body>
 </html>
