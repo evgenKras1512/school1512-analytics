@@ -14,6 +14,54 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <style>
+  /* Унифицируем вкладку Учителя под общий стиль */
+.teacher-assign-table th {
+  font-size: 12px;
+  padding: 10px 8px;
+  text-align: center;
+}
+.teacher-assign-table th.subject-head {
+  background: var(--bg-hover);
+  color: var(--primary);
+  font-size: 13px;
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 700;
+}
+.teacher-assign-table td {
+  padding: 8px;
+  text-align: center;
+}
+.teacher-assign-table td.class-name {
+  text-align: left;
+  font-weight: 700;
+  color: var(--primary);
+  background: var(--bg-card);
+  padding: 10px 14px;
+  font-size: 14px;
+  border-right: 2px solid var(--border);
+}
+.teacher-assign-table select {
+  width: 100%;
+  padding: 8px 10px;
+  font-size: 13px;
+  min-height: 40px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg-input);
+  color: var(--text);
+  font-family: inherit;
+}
+.teacher-assign-table select:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(44,82,130,.15);
+  background: var(--bg-card);
+}
+.teacher-assign-table select.empty {
+  color: var(--text-muted);
+  font-style: italic;
+}
   /* ============================================================
      ДИЗАЙН-СИСТЕМА
      Типографика: 12/14/17/22/28
