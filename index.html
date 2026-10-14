@@ -49,11 +49,24 @@ nav.tabs::-webkit-scrollbar{display:none}
 nav.tabs button{background:none;border:none;padding:14px 20px;font-size:14px;cursor:pointer;color:var(--text-muted);border-bottom:3px solid transparent;transition:all .2s;white-space:nowrap;font-family:inherit;font-weight:500;min-height:48px;display:inline-flex;align-items:center;gap:6px}
 nav.tabs button:hover{color:var(--primary);background:var(--bg-hover)}
 nav.tabs button.active{color:var(--primary);border-bottom-color:var(--primary);font-weight:600}
+
+/* ============ НАВИГАЦИЯ: группы и dropdown-портал ============ */
 .sa-nav-group{position:relative;display:inline-flex;align-items:center}
-.sa-nav-dropdown{position:absolute;top:100%;left:0;background:var(--bg-card);border:1px solid var(--border);border-radius:10px;box-shadow:0 8px 24px rgba(4,85,138,.18);padding:6px;min-width:230px;z-index:300;margin-top:2px;animation:fadeIn .15s ease}
-.sa-nav-dropdown button{display:flex;align-items:center;gap:10px;width:100%;padding:10px 12px;background:transparent;border:none;text-align:left;cursor:pointer;border-radius:6px;font-size:13px;font-family:'Roboto',sans-serif;color:var(--text-2);min-height:40px;transition:background .12s,color .12s}
-.sa-nav-dropdown button:hover{background:var(--bg-hover);color:var(--primary)}
-.sa-nav-dropdown button.active{background:var(--primary-soft);color:var(--primary);font-weight:600}
+.sa-nav-btn{background:none;border:none;padding:14px 20px;font-size:14px;cursor:pointer;color:var(--text-muted);border-bottom:3px solid transparent;transition:color .15s,background .15s;white-space:nowrap;font-family:inherit;font-weight:500;min-height:48px;display:inline-flex;align-items:center;gap:6px}
+.sa-nav-btn:hover{color:var(--primary);background:var(--bg-hover)}
+.sa-nav-btn.active{color:var(--primary);border-bottom-color:var(--primary);font-weight:600}
+.sa-nav-btn.active-open{color:var(--primary);background:var(--bg-hover)}
+.sa-nav-single{background:none;border:none;padding:14px 20px;font-size:14px;cursor:pointer;color:var(--text-muted);border-bottom:3px solid transparent;transition:color .15s,background .15s;white-space:nowrap;font-family:inherit;font-weight:500;min-height:48px;display:inline-flex;align-items:center;gap:6px}
+.sa-nav-single:hover{color:var(--primary);background:var(--bg-hover)}
+.sa-nav-single.active{color:var(--primary);border-bottom-color:var(--primary);font-weight:600}
+
+/* Портал dropdown рендерится в body и не обрезается nav.tabs */
+.sa-nav-dropdown-portal{position:fixed;background:var(--bg-card);border:1px solid var(--border);border-radius:10px;box-shadow:0 8px 24px rgba(4,85,138,.18);padding:6px;min-width:230px;z-index:9999;animation:fadeIn .12s ease;display:none}
+.sa-nav-dropdown-portal.open{display:block}
+.sa-nav-dropdown-portal button{display:flex;align-items:center;gap:10px;width:100%;padding:10px 12px;background:transparent;border:none;text-align:left;cursor:pointer;border-radius:6px;font-size:13px;font-family:'Roboto',sans-serif;color:var(--text-2);min-height:40px;transition:background .12s,color .12s}
+.sa-nav-dropdown-portal button:hover{background:var(--bg-hover);color:var(--primary)}
+.sa-nav-dropdown-portal button.active{background:var(--primary-soft);color:var(--primary);font-weight:600}
+
 main{flex:1;padding:24px;max-width:1600px;width:100%;margin:0 auto}
 .card{background:var(--bg-card);border-radius:var(--radius);padding:24px;box-shadow:var(--shadow);margin-bottom:20px;border:1px solid var(--border);animation:fadeInUp .35s ease}
 .card h2{color:var(--primary);margin-bottom:16px}
@@ -996,7 +1009,6 @@ function renderHeader() {
     </div>
   </header>`;
 }
-
 /* ============================================================
    РЕНДЕР: ГРУППИРОВАННАЯ НАВИГАЦИЯ
    ============================================================ */
@@ -1043,34 +1055,6 @@ function isItemActive(it, act) {
   return act.route === r;
 }
 
-window.saNavToggle = function(key) {
-  const all = document.querySelectorAll('.sa-nav-dropdown');
-  const target = document.querySelector(`[data-sa-dropdown="${key}"]`);
-  if (!target) return;
-  const isOpen = target.style.display === 'block';
-  all.forEach(d => d.style.display = 'none');
-  if (!isOpen) target.style.display = 'block';
-};
-window.saNavCloseAll = function() {
-  document.querySelectorAll('.sa-nav-dropdown').forEach(d => d.style.display = 'none');
-};
-window.saNavHover = function(key) {
-  const all = document.querySelectorAll('.sa-nav-dropdown');
-  const target = document.querySelector(`[data-sa-dropdown="${key}"]`);
-  if (!target) return;
-  all.forEach(d => { if (d !== target) d.style.display = 'none'; });
-  target.style.display = 'block';
-};
-window.saNavHoverOut = function(key) {
-  setTimeout(() => {
-    const grp = document.querySelector(`[data-sa-group="${key}"]`);
-    if (grp && !grp.matches(':hover')) {
-      const t = grp.querySelector(`[data-sa-dropdown="${key}"]`);
-      if (t) t.style.display = 'none';
-    }
-  }, 150);
-};
-
 function renderNav(active) {
   if (!SESSION) return '';
   const act = activeRouteObj();
@@ -1081,23 +1065,14 @@ function renderNav(active) {
     const isActive = isGroupActive(g, act) ? ' active' : '';
 
     if (g.type === 'single') {
-      html += `<button type="button" class="sa-nav-single${isActive}" onclick="location.hash='${g.key}'" title="${g.label}">
+      html += `<button type="button" class="sa-nav-single${isActive}" data-sa-hash="${g.key}" title="${g.label}">
         ${icon(g.icon, 16)} <span>${g.label}</span>
       </button>`;
     } else {
-      html += `<div class="sa-nav-group" data-sa-group="${g.key}"
-        onmouseenter="saNavHover('${g.key}')" onmouseleave="saNavHoverOut('${g.key}')">
-        <button type="button" class="sa-nav-btn${isActive}" onclick="saNavToggle('${g.key}')" title="${g.label}">
+      html += `<div class="sa-nav-group" data-sa-group="${g.key}">
+        <button type="button" class="sa-nav-btn${isActive}" data-sa-toggle="${g.key}" title="${g.label}">
           ${icon(g.icon, 16)} <span>${g.label}</span> ${icon('chevron-down', 12)}
         </button>
-        <div class="sa-nav-dropdown" data-sa-dropdown="${g.key}" style="display:none;">
-          ${g.items.map(it => {
-            const ia = isItemActive(it, act) ? ' active' : '';
-            return `<button type="button" class="${ia}" onclick="location.hash='${it.key}';saNavCloseAll();" title="${it.label}">
-              ${icon(it.icon, 14)} <span>${it.label}</span>
-            </button>`;
-          }).join('')}
-        </div>
       </div>`;
     }
   });
@@ -1105,14 +1080,173 @@ function renderNav(active) {
   return html;
 }
 
-/* Закрытие dropdown по клику вне */
-document.addEventListener('click', function(e) {
-  if (!e.target.closest('.sa-nav-group')) window.saNavCloseAll();
-});
-document.addEventListener('keydown', function(e) {
-  if (e.key === 'Escape') window.saNavCloseAll();
-});
+/* ============================================================
+   КОНТРОЛЛЕР НАВИГАЦИИ
+   Портал в body, position: fixed, без обрезки nav.tabs
+   ============================================================ */
+(function() {
+  const HOVER_MQ = window.matchMedia('(hover: hover) and (pointer: fine)');
+  let openKey = null;
+  let closeTimer = null;
 
+  function getGroups() {
+    return Array.from(document.querySelectorAll('.sa-nav-group[data-sa-group]'));
+  }
+  function getToggle(key) {
+    return document.querySelector(`[data-sa-toggle="${key}"]`);
+  }
+  function getGroup(key) {
+    return document.querySelector(`.sa-nav-group[data-sa-group="${key}"]`);
+  }
+  function getPortal() {
+    return document.getElementById('sa-nav-portal');
+  }
+
+  function ensurePortal() {
+    let p = getPortal();
+    if (!p) {
+      p = document.createElement('div');
+      p.id = 'sa-nav-portal';
+      p.className = 'sa-nav-dropdown-portal';
+      document.body.appendChild(p);
+      p.addEventListener('mouseenter', () => clearTimeout(closeTimer));
+      p.addEventListener('mouseleave', () => scheduleClose());
+    }
+    return p;
+  }
+
+  function buildItems(group) {
+    const items = group.items || [];
+    const act = activeRouteObj();
+    return items.map(it => {
+      const [r, s] = it.key.split('/');
+      const isActive = s
+        ? act.route === r && (act.sub === s || (!act.sub && s === 'main'))
+        : act.route === r;
+      return `<button type="button" data-sa-hash="${it.key}" class="${isActive ? 'active' : ''}">
+        ${icon(it.icon, 14)} <span>${it.label}</span>
+      </button>`;
+    }).join('');
+  }
+
+  function positionPortal(portal, toggle) {
+    const rect = toggle.getBoundingClientRect();
+    portal.style.top = (rect.bottom + 2) + 'px';
+    portal.style.left = rect.left + 'px';
+    const pw = portal.offsetWidth || 230;
+    if (rect.left + pw > window.innerWidth - 8) {
+      portal.style.left = Math.max(8, window.innerWidth - pw - 8) + 'px';
+    }
+  }
+
+  window.saNavOpen = function(key) {
+    const group = NAV_GROUPS.find(g => g.key === key);
+    const toggle = getToggle(key);
+    if (!group || !toggle || group.type !== 'group') return;
+    const portal = ensurePortal();
+    portal.innerHTML = buildItems(group);
+    portal.classList.add('open');
+    portal.style.visibility = 'hidden';
+    positionPortal(portal, toggle);
+    portal.style.visibility = '';
+    openKey = key;
+    toggle.classList.add('active-open');
+  };
+
+  window.saNavClose = function() {
+    const portal = getPortal();
+    if (portal) portal.classList.remove('open');
+    getGroups().forEach(g => {
+      const t = g.querySelector('[data-sa-toggle]');
+      if (t) t.classList.remove('active-open');
+    });
+    openKey = null;
+  };
+
+  window.saNavToggle = function(key) {
+    if (openKey === key) window.saNavClose();
+    else window.saNavOpen(key);
+  };
+
+  function scheduleClose() {
+    clearTimeout(closeTimer);
+    closeTimer = setTimeout(() => {
+      const portal = getPortal();
+      const group = openKey ? getGroup(openKey) : null;
+      if (portal && portal.matches(':hover')) return;
+      if (group && group.matches(':hover')) return;
+      window.saNavClose();
+    }, 180);
+  }
+
+  // клики
+  document.addEventListener('click', e => {
+    const toggle = e.target.closest('[data-sa-toggle]');
+    if (toggle) {
+      e.preventDefault();
+      e.stopPropagation();
+      window.saNavToggle(toggle.dataset.saToggle);
+      return;
+    }
+    const item = e.target.closest('#sa-nav-portal [data-sa-hash]');
+    if (item) {
+      e.preventDefault();
+      const hash = item.dataset.saHash;
+      window.saNavClose();
+      location.hash = hash;
+      return;
+    }
+    const single = e.target.closest('.sa-nav-single[data-sa-hash]');
+    if (single) {
+      e.preventDefault();
+      window.saNavClose();
+      location.hash = single.dataset.saHash;
+      return;
+    }
+    if (!e.target.closest('.sa-nav-group') && !e.target.closest('#sa-nav-portal')) {
+      window.saNavClose();
+    }
+  });
+
+  // hover — только на устройствах с настоящим курсором
+  document.addEventListener('mouseover', e => {
+    if (!HOVER_MQ.matches) return;
+    const toggle = e.target.closest('[data-sa-toggle]');
+    if (toggle) {
+      clearTimeout(closeTimer);
+      window.saNavOpen(toggle.dataset.saToggle);
+      return;
+    }
+    if (e.target.closest('#sa-nav-portal')) {
+      clearTimeout(closeTimer);
+    }
+  });
+
+  document.addEventListener('mouseout', e => {
+    if (!HOVER_MQ.matches) return;
+    const fromGroup = e.target.closest('.sa-nav-group');
+    const fromPortal = e.target.closest('#sa-nav-portal');
+    if (!fromGroup && !fromPortal) return;
+    const to = e.relatedTarget;
+    if (to && (to.closest('.sa-nav-group') || to.closest('#sa-nav-portal'))) return;
+    scheduleClose();
+  });
+
+  // закрытие при смене hash, resize, скролле
+  window.addEventListener('hashchange', () => window.saNavClose());
+  window.addEventListener('resize', () => window.saNavClose());
+  window.addEventListener('scroll', () => {
+    if (openKey) window.saNavClose();
+  }, { passive: true, capture: true });
+
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') window.saNavClose();
+  });
+})();
+
+/* ============================================================
+   PAGE + РОУТЕР
+   ============================================================ */
 function page(content, activeTab) {
   document.getElementById('app').innerHTML = renderHeader() + renderNav(activeTab) + `<main>${content}</main>`;
   setTimeout(initSwipe, 50);
@@ -1615,6 +1749,42 @@ function delStudent(id) {
 function openStudent(id) {
   if (!canAccessStudent(id)) { showToast('Нет доступа', 'error'); return; }
   location.hash = 'student/' + id;
+}
+function openStudentsPasteModal() {
+  showModal(`
+    <h2>${icon('upload', 20)} Импорт учеников</h2>
+    <div class="alert alert-info">${icon('info', 14)} Формат: <b>Фамилия Имя Отчество ДатаРождения</b> (через пробел или таб). По одному ученику в строке.</div>
+    <div class="form-group mb-16"><label>Класс для добавления</label>
+      <select id="imp_class">${DB.getClasses().map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></div>
+    <div class="form-group mb-16"><label>Список</label>
+      <textarea class="paste-area" id="imp_text" placeholder="Иванов Иван Иванович 15.03.2012
+Петрова Мария Сергеевна 22.07.2012"></textarea></div>
+    <div class="form-actions">
+      <button class="btn btn-primary" onclick="applyImportStudents()">${icon('check', 14)} Импортировать</button>
+      <button class="btn btn-outline" onclick="closeModal()">Отмена</button>
+    </div>
+  `);
+}
+function applyImportStudents() {
+  const cid = +document.getElementById('imp_class').value;
+  const text = document.getElementById('imp_text').value;
+  const list = parseStudentsText(text);
+  if (!list.length) { showToast('Нет данных', 'error'); return; }
+  UndoStack.push(`Импорт учеников (${list.length})`);
+  list.forEach(s => DB.addStudent({ ...s, classId: cid }));
+  closeModal();
+  showToast(`Добавлено: ${list.length}`, 'success');
+  render();
+}
+function openStudentsCsvModal() {
+  const students = allowedStudents();
+  const rows = [['Фамилия','Имя','Отчество','ДатаРождения','Класс']];
+  students.forEach(s => {
+    const c = DB.getClasses().find(x => x.id === s.classId);
+    rows.push([s.lastName, s.firstName, s.middleName, s.birthDate, c ? c.name : '']);
+  });
+  const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(';')).join('\n');
+  downloadCSV(`Ученики_${todayStr()}.csv`, csv);
 }
 
 /* ============================================================
@@ -2475,7 +2645,7 @@ function renderBackup() {
     </div>
     <div class="card">
       <div class="row-flex" style="justify-content:space-between;margin-bottom:14px;">
-        <h2 style="margin:0;">${icon('backup', 18)} Снапшоты</h2>
+        <h2 style="margin:0;">${icon('database', 18)} Снапшоты</h2>
         ${snapshots.length ? `<button class="btn btn-danger btn-sm" onclick="clearAllSnapshots()" title="Очистить">${icon('trash', 14)}</button>` : ''}
       </div>
       ${snapshots.length ? `<div class="table-wrap"><table>
@@ -3138,7 +3308,6 @@ function renderAnalyticsTeachers(tabs) {
     </div>
   `, 'analytics');
 }
-
 /* ============================================================
    ФИНАЛЬНЫЙ РОУТЕР
    ============================================================ */
@@ -3168,7 +3337,7 @@ function render() {
 }
 
 /* ============================================================
-   МОДУЛЬ ДИАГНОСТИК (встроен)
+   МОДУЛЬ ДИАГНОСТИК
    ============================================================ */
 function getDefaultTemplates() {
   return [
@@ -3722,7 +3891,7 @@ function diagAfterRenderCharts() {
 }
 
 /* ============================================================
-   МОДУЛЬ ОТЧЁТОВ (встроен)
+   МОДУЛЬ ОТЧЁТОВ
    ============================================================ */
 function reportsComputeSubjectStats(subject) {
   const students = allowedStudents();
@@ -4180,444 +4349,11 @@ loadDraft();
 initMobileMode();
 UndoStack.load();
 render();
-
+</script>
+<script>
 window.addEventListener('load', () => {
   if ('serviceWorker' in navigator) navigator.serviceWorker.ready.then(reg => reg.update());
 });
-</script>
-<script>
-/* ============================================================
-   FIX v4.0 — надёжное открытие dropdown в навигации
-   Работает через event delegation + подстраховка через клик
-   по координатам, если кнопка чем-то перекрыта
-   ============================================================ */
-(function() {
-  'use strict';
-
-  console.log('[FIX v4.0] загружен');
-
-  // ------- 1. Открытие/закрытие dropdown -------
-  window.saNavOpen = function(key) {
-    document.querySelectorAll('.sa-nav-dropdown').forEach(d => {
-      if (d.getAttribute('data-sa-dropdown') === key) {
-        d.style.display = 'block';
-        d.style.position = 'absolute';
-        d.style.top = '100%';
-        d.style.left = '0';
-        d.style.zIndex = '9999';
-        d.style.background = 'var(--bg-card, #fff)';
-        d.style.border = '1px solid var(--border, #d9e4ec)';
-        d.style.borderRadius = '10px';
-        d.style.boxShadow = '0 8px 24px rgba(4,85,138,.18)';
-        d.style.padding = '6px';
-        d.style.minWidth = '230px';
-      } else {
-        d.style.display = 'none';
-      }
-    });
-  };
-
-  window.saNavClose = function() {
-    document.querySelectorAll('.sa-nav-dropdown').forEach(d => {
-      d.style.display = 'none';
-    });
-  };
-
-  window.saNavSwitch = function(key) {
-    const target = document.querySelector(`[data-sa-dropdown="${key}"]`);
-    if (!target) return;
-    const isOpen = target.style.display === 'block';
-    window.saNavClose();
-    if (!isOpen) window.saNavOpen(key);
-  };
-
-  // ------- 2. Event delegation: клик по любой кнопке группы -------
-  document.addEventListener('click', function(e) {
-    // 1. Клик по пункту dropdown
-    const item = e.target.closest('.sa-nav-dropdown button');
-    if (item) {
-      const hash = item.getAttribute('data-hash');
-      if (hash) {
-        e.preventDefault();
-        e.stopPropagation();
-        window.saNavClose();
-        location.hash = hash;
-        setTimeout(() => {
-          if (window.render) window.render();
-        }, 30);
-        return;
-      }
-    }
-
-    // 2. Клик по toggle-кнопке группы
-    const toggle = e.target.closest('[data-sa-group-toggle]');
-    if (toggle) {
-      e.preventDefault();
-      e.stopPropagation();
-      const key = toggle.getAttribute('data-sa-group-toggle');
-      window.saNavSwitch(key);
-      return;
-    }
-
-    // 3. Клик по одиночной вкладке
-    const single = e.target.closest('.sa-nav-single');
-    if (single) {
-      e.preventDefault();
-      e.stopPropagation();
-      window.saNavClose();
-      const hash = single.getAttribute('data-hash');
-      if (hash) {
-        location.hash = hash;
-        setTimeout(() => { if (window.render) window.render(); }, 30);
-      }
-      return;
-    }
-
-    // 4. Клик мимо навигации — закрыть все dropdown
-    if (!e.target.closest('.sa-nav-group')) {
-      window.saNavClose();
-    }
-  }, true); // true — перехватываем раньше всех
-
-  // ------- 3. Подстраховка: если кнопка перекрыта чем-то -------
-  // Навешиваем обработчик на mouseover — открываем dropdown
-  document.addEventListener('mouseover', function(e) {
-    const toggle = e.target.closest('[data-sa-group-toggle]');
-    if (toggle) {
-      const key = toggle.getAttribute('data-sa-group-toggle');
-      setTimeout(() => {
-        const grp = document.querySelector(`[data-sa-group="${key}"]`);
-        if (grp && grp.matches(':hover')) {
-          window.saNavOpen(key);
-        }
-      }, 50);
-    }
-  }, true);
-
-  document.addEventListener('mouseout', function(e) {
-    const grp = e.target.closest('.sa-nav-group');
-    if (grp) {
-      const key = grp.getAttribute('data-sa-group');
-      setTimeout(() => {
-        const g = document.querySelector(`[data-sa-group="${key}"]`);
-        if (g && !g.matches(':hover')) {
-          const d = document.querySelector(`[data-sa-dropdown="${key}"]`);
-          if (d) d.style.display = 'none';
-        }
-      }, 200);
-    }
-  }, true);
-
-  // ------- 4. Закрытие по Escape -------
-  document.addEventListener('keydown', function(e) {
-    if (e.key === 'Escape') window.saNavClose();
-  }, true);
-
-  // ------- 5. После рендера проставляем data-hash на кнопки -------
-  function patchNavButtons() {
-    const nav = document.querySelector('nav.tabs');
-    if (!nav) return;
-
-    // Проверяем, что навигация наша
-    const isGroupedNav = nav.id === 'sa-grouped-nav' || nav.querySelector('.sa-nav-group');
-    if (!isGroupedNav) {
-      console.log('[FIX v4.0] навигация не найдена — патчим при следующем рендере');
-      return;
-    }
-
-    // Патчим одиночные кнопки
-    nav.querySelectorAll('.sa-nav-single').forEach(btn => {
-      if (!btn.getAttribute('data-hash')) {
-        const onclick = btn.getAttribute('onclick') || '';
-        const m = onclick.match(/location\.hash='([^']+)'/);
-        if (m) btn.setAttribute('data-hash', m[1]);
-      }
-    });
-
-    // Патчим пункты dropdown
-    nav.querySelectorAll('.sa-nav-dropdown button').forEach(btn => {
-      if (!btn.getAttribute('data-hash')) {
-        const onclick = btn.getAttribute('onclick') || '';
-        const m = onclick.match(/location\.hash='([^']+)'/);
-        if (m) btn.setAttribute('data-hash', m[1]);
-      }
-    });
-
-    // Принудительно ставим высокий z-index на все группы
-    nav.querySelectorAll('.sa-nav-group').forEach(g => {
-      g.style.position = 'relative';
-      g.style.zIndex = '999';
-    });
-    nav.querySelectorAll('.sa-nav-dropdown').forEach(d => {
-      d.style.position = 'absolute';
-      d.style.zIndex = '9999';
-    });
-  }
-
-  setTimeout(patchNavButtons, 300);
-  setTimeout(patchNavButtons, 800);
-
-  // MutationObserver следит, чтобы после каждого рендера всё перепатчить
-  const app = document.getElementById('app');
-  if (app) {
-    const observer = new MutationObserver(() => {
-      setTimeout(patchNavButtons, 50);
-    });
-    observer.observe(app, { childList: true, subtree: false });
-  }
-
-  // ------- 6. Финальная проверка -------
-  setTimeout(() => {
-    const btns = document.querySelectorAll('[data-sa-group-toggle]');
-    console.log('[FIX v4.0] найдено кнопок групп:', btns.length);
-    btns.forEach(b => {
-      console.log('[FIX v4.0]  группа:', b.getAttribute('data-sa-group-toggle'));
-    });
-  }, 1000);
-
-  console.log('[FIX v4.0] установлен');
-})();
-</script>
-<script>
-/* ============================================================
-   FIX v6 — определяем saNavToggle и saNavCloseAll в window
-   ============================================================ */
-window.saNavToggle = function(key) {
-  const all = document.querySelectorAll('.sa-nav-dropdown');
-  const target = document.querySelector('[data-sa-dropdown="' + key + '"]');
-
-  // Если у кнопок нет data-атрибутов, найдём dropdown по позиции
-  if (!target) {
-    // Все dropdown лежат в .sa-nav-group
-    const groups = document.querySelectorAll('.sa-nav-group');
-    groups.forEach((g, i) => {
-      // Порядок: analytics(0), work(1), admin(2)
-      const indexMap = { analytics: 0, work: 1, admin: 2 };
-      if (indexMap[key] === i) {
-        const dd = g.querySelector('.sa-nav-dropdown') || g.querySelector('div[style*="position"]');
-        // Ищем любой вложенный блок, похожий на dropdown
-        const anyDD = g.children[1];
-        if (anyDD) {
-          const isOpen = anyDD.style.display === 'block';
-          all.forEach(d => d.style.display = 'none');
-          if (!isOpen) anyDD.style.display = 'block';
-        }
-      }
-    });
-    return;
-  }
-
-  const isOpen = target.style.display === 'block';
-  all.forEach(d => d.style.display = 'none');
-  if (!isOpen) target.style.display = 'block';
-};
-
-window.saNavCloseAll = function() {
-  document.querySelectorAll('.sa-nav-dropdown').forEach(d => d.style.display = 'none');
-  // Подстраховка: закрываем все вложенные блоки групп
-  document.querySelectorAll('.sa-nav-group').forEach(g => {
-    if (g.children[1] && g.children[1].tagName !== 'BUTTON') {
-      g.children[1].style.display = 'none';
-    }
-  });
-};
-
-window.saNavClose = window.saNavCloseAll;
-
-/* Закрытие по клику вне навигации */
-document.addEventListener('click', function(e) {
-  if (!e.target.closest('.sa-nav-group')) {
-    window.saNavCloseAll();
-  }
-});
-
-/* Закрытие по Escape */
-document.addEventListener('keydown', function(e) {
-  if (e.key === 'Escape') window.saNavCloseAll();
-});
-
-console.log('[FIX v6] saNavToggle / saNavCloseAll определены');
-</script>
-<script>
-/* ============================================================
-   FIX v10 — принудительно выставляем opacity: 1 при открытии
-   ============================================================ */
-(function() {
-  const ORDER = { analytics: 0, work: 1, admin: 2 };
-
-  function getGroups() { return Array.from(document.querySelectorAll('.sa-nav-group')); }
-  function getDD(g) {
-    if (!g) return null;
-    for (const c of g.children) if (c.tagName !== 'BUTTON') return c;
-    return null;
-  }
-
-  window.saNavCloseAll = function() {
-    getGroups().forEach(g => {
-      const dd = getDD(g);
-      if (dd) {
-        dd.style.setProperty('display', 'none', 'important');
-        dd.style.setProperty('opacity', '0', 'important');
-      }
-    });
-  };
-  window.saNavClose = window.saNavCloseAll;
-
-  window.saNavToggle = function(key) {
-    const all = getGroups();
-    const idx = ORDER[key];
-    const g = all[idx];
-    if (!g) { console.warn('[v10] группа не найдена:', key); return; }
-    const dd = getDD(g);
-    if (!dd) { console.warn('[v10] dropdown не найден:', key); return; }
-
-    // Закрываем все другие
-    all.forEach((gr, i) => {
-      if (i !== idx) {
-        const d = getDD(gr);
-        if (d) {
-          d.style.setProperty('display', 'none', 'important');
-          d.style.setProperty('opacity', '0', 'important');
-        }
-      }
-    });
-
-    const isOpen = dd.style.display === 'block' && getComputedStyle(dd).opacity === '1';
-    if (isOpen) {
-      dd.style.setProperty('display', 'none', 'important');
-      dd.style.setProperty('opacity', '0', 'important');
-      console.log('[v10] закрыли', key);
-    } else {
-      Object.assign(dd.style, {
-        position: 'absolute',
-        top: '100%',
-        left: '0',
-        zIndex: '99999',
-        background: '#fff',
-        border: '1px solid #d9e4ec',
-        borderRadius: '10px',
-        boxShadow: '0 8px 24px rgba(4,85,138,.18)',
-        padding: '6px',
-        minWidth: '230px',
-        transition: 'none',
-        animation: 'none',
-      });
-      dd.style.setProperty('display', 'block', 'important');
-      dd.style.setProperty('opacity', '1', 'important');
-      console.log('[v10] открыли', key, '| opacity:', getComputedStyle(dd).opacity);
-    }
-  };
-
-  document.addEventListener('click', e => {
-    if (!e.target.closest('.sa-nav-group')) window.saNavCloseAll();
-  }, true);
-  document.addEventListener('keydown', e => {
-    if (e.key === 'Escape') window.saNavCloseAll();
-  }, true);
-
-  console.log('[v10] установлен. Групп:', getGroups().length);
-})();
-</script>
-<script>
-/* ============================================================
-   FIX v12 — dropdown через position: fixed поверх всего
-   Не обрезается nav.tabs и другими родителями
-   ============================================================ */
-(function() {
-  const ORDER = { analytics: 0, work: 1, admin: 2 };
-
-  function getGroups() { return Array.from(document.querySelectorAll('.sa-nav-group')); }
-  function getDD(g) {
-    if (!g) return null;
-    for (const c of g.children) if (c.tagName !== 'BUTTON') return c;
-    return null;
-  }
-  function getToggleButton(g) {
-    for (const c of g.children) if (c.tagName === 'BUTTON') return c;
-    return null;
-  }
-
-  window.saNavCloseAll = function() {
-    getGroups().forEach(g => {
-      const dd = getDD(g);
-      if (dd) {
-        dd.style.setProperty('display', 'none', 'important');
-        dd.style.setProperty('opacity', '0', 'important');
-      }
-    });
-  };
-  window.saNavClose = window.saNavCloseAll;
-
-  window.saNavToggle = function(key) {
-    const all = getGroups();
-    const idx = ORDER[key];
-    const g = all[idx];
-    if (!g) { console.warn('[v12] группа не найдена:', key); return; }
-    const dd = getDD(g);
-    const btn = getToggleButton(g);
-    if (!dd || !btn) { console.warn('[v12] элементы не найдены:', key); return; }
-
-    // Закрываем всё остальное
-    all.forEach((gr, i) => {
-      if (i !== idx) {
-        const d = getDD(gr);
-        if (d) {
-          d.style.setProperty('display', 'none', 'important');
-          d.style.setProperty('opacity', '0', 'important');
-        }
-      }
-    });
-
-    const opened = dd.style.display === 'block' && getComputedStyle(dd).opacity === '1';
-    if (opened) {
-      dd.style.setProperty('display', 'none', 'important');
-      dd.style.setProperty('opacity', '0', 'important');
-      console.log('[v12] закрыли', key);
-      return;
-    }
-
-    // Считаем координаты кнопки
-    const rect = btn.getBoundingClientRect();
-
-    // Жёстко задаём все стили, чтобы не обрезалось
-    Object.assign(dd.style, {
-      position: 'fixed',
-      top: (rect.bottom + 4) + 'px',
-      left: rect.left + 'px',
-      zIndex: '999999',
-      background: '#fff',
-      border: '1px solid #d9e4ec',
-      borderRadius: '10px',
-      boxShadow: '0 8px 24px rgba(4,85,138,.22)',
-      padding: '6px',
-      minWidth: '230px',
-      maxHeight: '70vh',
-      overflowY: 'auto',
-      transition: 'none',
-      animation: 'none',
-      transform: 'none',
-    });
-    dd.style.setProperty('display', 'block', 'important');
-    dd.style.setProperty('opacity', '1', 'important');
-    dd.style.setProperty('visibility', 'visible', 'important');
-
-    console.log('[v12] открыли', key, 'по координатам', rect.left, rect.bottom + 4);
-  };
-
-  // Клик вне — закрыть
-  document.addEventListener('click', e => {
-    if (!e.target.closest('.sa-nav-group')) window.saNavCloseAll();
-  }, true);
-  document.addEventListener('keydown', e => {
-    if (e.key === 'Escape') window.saNavCloseAll();
-  }, true);
-  // При ресайзе — закрыть (координаты становятся некорректными)
-  window.addEventListener('resize', () => window.saNavCloseAll());
-  // При скролле страницы — тоже закрыть
-  window.addEventListener('scroll', () => window.saNavCloseAll(), true);
-
-  console.log('[v12] установлен. Групп:', getGroups().length);
-})();
 </script>
 </body>
 </html>
