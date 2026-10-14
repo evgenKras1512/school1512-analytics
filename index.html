@@ -9,6 +9,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Школьная аналитика">
 <link rel="manifest" href="manifest.json">
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700;900&display=swap" rel="stylesheet">
 <link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'%3E%3Crect width='192' height='192' rx='32' fill='%231e3a5f'/%3E%3Ctext x='96' y='128' font-size='96' text-anchor='middle' fill='white' font-family='Arial'%3E📊%3C/text%3E%3C/svg%3E">
 <title>Школьная аналитика</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
@@ -69,6 +70,13 @@
   * { box-sizing: border-box; margin: 0; padding: 0; }
 
   :root {
+    --primary: #04558a;        /* Основной тёмно-синий */
+    --primary-dark: #033f66;   /* Более тёмный оттенок для наведения */
+    --primary-light: #398ec6;  /* Голубой для акцентов */
+    --accent: #1893d2;         /* Яркий голубой (фирменный) */
+    --success: #38a169;        /* Зелёный (оставьте, он не на сайте) */
+    --warning: #dd6b20;        /* Оранжевый (оставьте) */
+    --danger: #c53030;         /* Красный (оставьте) */
     --bg-body: #f0f2f5;
     --bg-card: #ffffff;
     --bg-elevated: #ffffff;
@@ -114,7 +122,7 @@
   }
 
   body {
-    font-family: 'Segoe UI', Roboto, -apple-system, sans-serif;
+    font-family: 'Roboto', -apple-system, 'Segoe UI', sans-serif;
     background: var(--bg-body);
     color: var(--text);
     transition: background .25s ease, color .25s ease;
@@ -1508,7 +1516,12 @@ function renderHeader() {
     ${icon('info')} Демонстрация мобильного режима
   </div>
   <header>
-    <div class="brand">${icon('bar-chart', 22)} Школьная аналитика</div>
+    <div class="brand">
+      <img src="https://sch1512.mskobr.ru/attach_files/logo/logo1512_1.png" 
+           alt="Школа № 1512" 
+           style="height:32px;width:auto;margin-right:10px;vertical-align:middle;">
+      Школьная аналитика
+    </div>
     <div class="user-info">
       <button class="theme-btn" onclick="cycleTheme()" title="${themeTitle}">
         ${icon(themeIcon, 16)}
