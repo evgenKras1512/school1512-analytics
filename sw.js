@@ -1,7 +1,7 @@
 /* ============================================================
    SERVICE WORKER v2.0.1
    ============================================================ */
-const CACHE_VERSION = 'v2.0.2';
+const CACHE_VERSION = 'v2.0.3';
 const CACHE_NAME = `school-analytics-${CACHE_VERSION}`;
 
 const PRECACHE_URLS = [
