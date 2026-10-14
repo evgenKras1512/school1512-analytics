@@ -8399,68 +8399,14 @@ if (SESSION) render();
 </script>
 <script>
 /* ============================================================
-   FIX v2.0 — Группировка вкладок в тематические разделы
-   Заменяет 11 кнопок на 6 с выпадающими подменю
+   FIX v2.1 — Группированная навигация (event delegation)
+   Работает надёжно: клики ловятся на уровне nav, dropdown
+   не теряет обработчики при перерисовках.
    ============================================================ */
 (function() {
   'use strict';
 
-  // ============================================================
-  // СТРУКТУРА РАЗДЕЛОВ
-  // ============================================================
-  const NAV_GROUPS = [
-    // Простые одиночные вкладки (не группируются)
-    { type: 'single', key: 'dashboard', icon: 'home', label: 'Панель' },
-    { type: 'single', key: 'students',  icon: 'users', label: 'Обучающиеся' },
-    { type: 'single', key: 'classes',   icon: 'building', label: 'Классы' },
-
-    // Группа «Аналитика»
-    {
-      type: 'group',
-      key: 'analytics',
-      icon: 'chart',
-      label: 'Аналитика',
-      items: [
-        { key: 'analytics/main',      icon: 'chart',    label: 'Общая аналитика' },
-        { key: 'analytics/heatmap',   icon: 'grid',     label: 'Тепловая карта' },
-        { key: 'analytics/risks',     icon: 'alert',    label: 'Риски' },
-        { key: 'analytics/teachers',  icon: 'user',     label: 'Учителя' },
-        { key: 'diagnostics/templates',   icon: 'check', label: 'Диагностики' },
-        { key: 'reports/quality',         icon: 'award', label: 'Отчёты школы' },
-      ],
-    },
-
-    // Группа «Работа»
-    {
-      type: 'group',
-      key: 'work',
-      icon: 'edit',
-      label: 'Работа',
-      adminOnly: true,
-      items: [
-        { key: 'journal',          icon: 'edit', label: 'Журнал' },
-        { key: 'subject-teachers', icon: 'user', label: 'Учителя' },
-      ],
-    },
-
-    // Группа «Администрирование»
-    {
-      type: 'group',
-      key: 'admin',
-      icon: 'settings',
-      label: 'Админ',
-      adminOnly: true,
-      items: [
-        { key: 'directories', icon: 'settings', label: 'Справочники' },
-        { key: 'users',       icon: 'user',     label: 'Пользователи' },
-        { key: 'backup',      icon: 'database', label: 'Бэкап' },
-      ],
-    },
-  ];
-
-  // ============================================================
-  // SVG-ИКОНКИ (Feather)
-  // ============================================================
+  /* ---------- SVG-иконки ---------- */
   function svgIcon(name, size) {
     size = size || 16;
     const paths = {
@@ -8479,18 +8425,48 @@ if (SESSION) render();
       'chevron-down': '<polyline points="6 9 12 15 18 9"/>',
     };
     const inner = paths[name] || paths.chart;
-    return `<svg class="icon" xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${inner}</svg>`;
+    return '<svg class="icon" xmlns="http://www.w3.org/2000/svg" width="' + size + '" height="' + size + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' + inner + '</svg>';
   }
 
-  // ============================================================
-  // ОПРЕДЕЛЕНИЕ АКТИВНОГО РАЗДЕЛА
-  // ============================================================
-  function getActiveKey() {
+  /* ---------- Структура ---------- */
+  const NAV_GROUPS = [
+    { type: 'single', key: 'dashboard', icon: 'home', label: 'Панель' },
+    { type: 'single', key: 'students',  icon: 'users', label: 'Обучающиеся' },
+    { type: 'single', key: 'classes',   icon: 'building', label: 'Классы' },
+    {
+      type: 'group', key: 'analytics', icon: 'chart', label: 'Аналитика',
+      items: [
+        { key: 'analytics/main',       icon: 'chart',  label: 'Общая аналитика' },
+        { key: 'analytics/heatmap',    icon: 'grid',   label: 'Тепловая карта' },
+        { key: 'analytics/risks',      icon: 'alert',  label: 'Риски' },
+        { key: 'analytics/teachers',   icon: 'user',   label: 'Учителя' },
+        { key: 'diagnostics/templates', icon: 'check', label: 'Диагностики' },
+        { key: 'reports/quality',      icon: 'award',  label: 'Отчёты школы' },
+      ],
+    },
+    {
+      type: 'group', key: 'work', icon: 'edit', label: 'Работа', adminOnly: true,
+      items: [
+        { key: 'journal',          icon: 'edit', label: 'Журнал' },
+        { key: 'subject-teachers', icon: 'user', label: 'Учителя' },
+      ],
+    },
+    {
+      type: 'group', key: 'admin', icon: 'settings', label: 'Админ', adminOnly: true,
+      items: [
+        { key: 'directories', icon: 'settings', label: 'Справочники' },
+        { key: 'users',       icon: 'user',     label: 'Пользователи' },
+        { key: 'backup',      icon: 'database', label: 'Бэкап' },
+      ],
+    },
+  ];
+
+  /* ---------- Утилиты ---------- */
+  function getActive() {
     const hash = location.hash.replace('#', '') || 'dashboard';
-    const parts = hash.split('/');
-    return { route: parts[0], sub: parts[1] || '', full: hash };
+    const [route, sub] = hash.split('/');
+    return { route, sub: sub || '', full: hash };
   }
-
   function isGroupActive(group, active) {
     if (group.type === 'single') return active.route === group.key;
     return group.items.some(it => {
@@ -8499,121 +8475,57 @@ if (SESSION) render();
       return active.route === r;
     });
   }
+  function isItemActive(item, active) {
+    const [r, s] = item.key.split('/');
+    if (s) return active.route === r && (active.sub === s || (!active.sub && s === 'main'));
+    return active.route === r;
+  }
 
-  // ============================================================
-  // СОЗДАНИЕ НАВИГАЦИИ
-  // ============================================================
+  /* ---------- Построение навигации ---------- */
   function buildNav() {
     const nav = document.createElement('nav');
     nav.className = 'tabs';
     nav.id = 'sa-grouped-nav';
 
-    const active = getActiveKey();
+    const active = getActive();
     const isAdmin = typeof SESSION !== 'undefined' && SESSION && SESSION.role === 'admin';
 
-    NAV_GROUPS.forEach(group => {
+    NAV_GROUPS.forEach((group, gi) => {
       if (group.adminOnly && !isAdmin) return;
 
       if (group.type === 'single') {
         const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.setAttribute('data-sa-nav-single', group.key);
         btn.innerHTML = svgIcon(group.icon, 16) + ' <span>' + group.label + '</span>';
-        btn.title = group.label;
         if (isGroupActive(group, active)) btn.classList.add('active');
-        btn.onclick = () => { location.hash = group.key; };
         nav.appendChild(btn);
       } else {
         const wrapper = document.createElement('div');
         wrapper.className = 'sa-nav-group';
-        wrapper.style.cssText = 'position:relative;display:inline-flex;align-items:center;';
+        wrapper.setAttribute('data-sa-group', group.key);
 
         const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.setAttribute('data-sa-group-toggle', group.key);
         btn.innerHTML = svgIcon(group.icon, 16) + ' <span>' + group.label + '</span> ' + svgIcon('chevron-down', 12);
-        btn.title = group.label;
-        btn.style.cssText = 'display:inline-flex;align-items:center;gap:6px;';
         if (isGroupActive(group, active)) btn.classList.add('active');
 
         const dropdown = document.createElement('div');
         dropdown.className = 'sa-nav-dropdown';
-        dropdown.style.cssText = `
-          display: none;
-          position: absolute;
-          top: 100%;
-          left: 0;
-          background: var(--bg-card, #fff);
-          border: 1px solid var(--border, #d9e4ec);
-          border-radius: 10px;
-          box-shadow: var(--shadow-md, 0 4px 16px rgba(4,85,138,.12));
-          padding: 6px;
-          min-width: 220px;
-          z-index: 200;
-          margin-top: 4px;
-        `;
+        dropdown.setAttribute('data-sa-dropdown', group.key);
+        dropdown.style.display = 'none';
 
         group.items.forEach(item => {
           const itemBtn = document.createElement('button');
+          itemBtn.type = 'button';
+          itemBtn.setAttribute('data-sa-nav-item', item.key);
           itemBtn.innerHTML = svgIcon(item.icon, 14) + ' <span>' + item.label + '</span>';
-          itemBtn.style.cssText = `
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            width: 100%;
-            padding: 10px 12px;
-            background: transparent;
-            border: none;
-            text-align: left;
-            cursor: pointer;
-            border-radius: 6px;
-            font-size: 13px;
-            font-family: inherit;
-            color: var(--text-2, #33475b);
-            min-height: 40px;
-          `;
-          itemBtn.onmouseover = () => {
-            itemBtn.style.background = 'var(--bg-hover, #eef4f9)';
-            itemBtn.style.color = 'var(--primary, #04558a)';
-          };
-          itemBtn.onmouseout = () => {
-            itemBtn.style.background = 'transparent';
-            itemBtn.style.color = 'var(--text-2, #33475b)';
-          };
-          // Проверяем активность
-          const [r, s] = item.key.split('/');
-          const itemActive = s
-            ? (active.route === r && (active.sub === s || (!active.sub && s === 'main')))
-            : active.route === r;
-          if (itemActive) {
-            itemBtn.style.background = 'var(--primary-soft, #e6f0f7)';
-            itemBtn.style.color = 'var(--primary, #04558a)';
-            itemBtn.style.fontWeight = '600';
+          if (isItemActive(item, active)) {
+            itemBtn.classList.add('sa-nav-item-active');
           }
-          itemBtn.onclick = () => {
-            location.hash = item.key;
-            dropdown.style.display = 'none';
-          };
           dropdown.appendChild(itemBtn);
         });
-
-        // Открытие/закрытие dropdown
-        let closeTimer = null;
-        const openDropdown = () => {
-          if (closeTimer) { clearTimeout(closeTimer); closeTimer = null; }
-          dropdown.style.display = 'block';
-        };
-        const closeDropdown = () => {
-          closeTimer = setTimeout(() => { dropdown.style.display = 'none'; }, 200);
-        };
-
-        btn.onclick = (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          if (dropdown.style.display === 'block') dropdown.style.display = 'none';
-          else openDropdown();
-        };
-
-        btn.addEventListener('mouseenter', openDropdown);
-        btn.addEventListener('mouseleave', closeDropdown);
-        dropdown.addEventListener('mouseenter', openDropdown);
-        dropdown.addEventListener('mouseleave', closeDropdown);
 
         wrapper.appendChild(btn);
         wrapper.appendChild(dropdown);
@@ -8624,166 +8536,371 @@ if (SESSION) render();
     return nav;
   }
 
-  // ============================================================
-  // ЗАМЕНА НАВИГАЦИИ
-  // ============================================================
+  /* ---------- Стили ---------- */
+  function ensureStyles() {
+    if (document.getElementById('sa-grouped-nav-styles')) return;
+    const style = document.createElement('style');
+    style.id = 'sa-grouped-nav-styles';
+    style.textContent = `
+      #sa-grouped-nav {
+        display: flex;
+        align-items: center;
+        background: var(--bg-card, #fff);
+        border-bottom: 2px solid var(--border, #d9e4ec);
+        padding: 0 24px;
+        gap: 4px;
+        overflow-x: auto;
+        position: sticky;
+        top: 66px;
+        z-index: 99;
+        scrollbar-width: none;
+      }
+      #sa-grouped-nav::-webkit-scrollbar { display: none; }
+
+      #sa-grouped-nav > button,
+      #sa-grouped-nav .sa-nav-group > button {
+        background: none;
+        border: none;
+        padding: 14px 18px;
+        font-size: 14px;
+        cursor: pointer;
+        color: var(--text-muted, #6a7f94);
+        border-bottom: 3px solid transparent;
+        transition: all .18s ease;
+        white-space: nowrap;
+        font-family: 'Roboto', -apple-system, sans-serif;
+        font-weight: 500;
+        min-height: 48px;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+      }
+      #sa-grouped-nav > button:hover,
+      #sa-grouped-nav .sa-nav-group > button:hover {
+        color: var(--primary, #04558a);
+        background: var(--bg-hover, #eef4f9);
+      }
+      #sa-grouped-nav > button.active,
+      #sa-grouped-nav .sa-nav-group > button.active {
+        color: var(--primary, #04558a);
+        border-bottom-color: var(--primary, #04558a);
+        font-weight: 600;
+      }
+      #sa-grouped-nav .icon {
+        width: 16px;
+        height: 16px;
+        stroke-width: 2;
+        flex-shrink: 0;
+      }
+      #sa-grouped-nav .sa-nav-group > button .icon:last-child {
+        width: 12px;
+        height: 12px;
+        opacity: .6;
+      }
+
+      /* Группа */
+      .sa-nav-group {
+        position: relative;
+        display: inline-flex;
+        align-items: center;
+      }
+
+      /* Dropdown */
+      .sa-nav-dropdown {
+        position: absolute;
+        top: 100%;
+        left: 0;
+        background: var(--bg-card, #fff);
+        border: 1px solid var(--border, #d9e4ec);
+        border-radius: 10px;
+        box-shadow: 0 8px 24px rgba(4, 85, 138, .18);
+        padding: 6px;
+        min-width: 230px;
+        z-index: 300;
+        margin-top: 2px;
+      }
+      .sa-nav-dropdown button {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        width: 100%;
+        padding: 10px 12px;
+        background: transparent;
+        border: none;
+        text-align: left;
+        cursor: pointer;
+        border-radius: 6px;
+        font-size: 13px;
+        font-family: 'Roboto', -apple-system, sans-serif;
+        color: var(--text-2, #33475b);
+        min-height: 40px;
+        transition: background .12s ease, color .12s ease;
+      }
+      .sa-nav-dropdown button:hover {
+        background: var(--bg-hover, #eef4f9);
+        color: var(--primary, #04558a);
+      }
+      .sa-nav-dropdown button.sa-nav-item-active {
+        background: var(--primary-soft, #e6f0f7);
+        color: var(--primary, #04558a);
+        font-weight: 600;
+      }
+      .sa-nav-dropdown .icon {
+        width: 14px;
+        height: 14px;
+      }
+
+      /* Тёмная тема */
+      html[data-theme="dark"] #sa-grouped-nav {
+        background: var(--bg-card, #152535);
+        border-bottom-color: var(--border, #24384d);
+      }
+      html[data-theme="dark"] .sa-nav-dropdown {
+        background: var(--bg-card, #152535);
+        border-color: var(--border, #24384d);
+        box-shadow: 0 8px 24px rgba(0, 0, 0, .5);
+      }
+
+      /* Мобильный режим */
+      html.mobile-mode #sa-grouped-nav {
+        padding: 0 8px;
+        top: 56px;
+      }
+      html.mobile-mode #sa-grouped-nav > button,
+      html.mobile-mode #sa-grouped-nav .sa-nav-group > button {
+        padding: 12px 10px;
+        font-size: 12px;
+      }
+      html.mobile-mode #sa-grouped-nav .icon {
+        width: 14px;
+        height: 14px;
+      }
+      html.mobile-mode .sa-nav-dropdown {
+        min-width: 180px;
+      }
+
+      @media (max-width: 900px) {
+        #sa-grouped-nav { padding: 0 12px; top: 60px; }
+        #sa-grouped-nav > button,
+        #sa-grouped-nav .sa-nav-group > button { padding: 12px 14px; font-size: 13px; }
+      }
+      @media (max-width: 640px) {
+        #sa-grouped-nav { top: 56px; }
+        #sa-grouped-nav > button,
+        #sa-grouped-nav .sa-nav-group > button { padding: 12px 10px; font-size: 12px; }
+      }
+    `;
+    document.head.appendChild(style);
+  }
+
+  /* ---------- Замена навигации ---------- */
   function replaceNav() {
     const app = document.getElementById('app');
     if (!app) return;
-
-    const existingNav = app.querySelector('nav.tabs');
-    if (!existingNav) return;
-
+    const oldNav = app.querySelector('nav.tabs');
+    if (!oldNav) return;
+    if (oldNav.id === 'sa-grouped-nav') {
+      // Обновляем активные классы
+      updateActive();
+      return;
+    }
     const newNav = buildNav();
-    existingNav.replaceWith(newNav);
+    oldNav.replaceWith(newNav);
   }
 
-  // ============================================================
-  // ЗАПУСК
-  // ============================================================
+  /* ---------- Обновление активных классов без перестройки ---------- */
+  function updateActive() {
+    const nav = document.getElementById('sa-grouped-nav');
+    if (!nav) return;
+    const active = getActive();
+    const isAdmin = typeof SESSION !== 'undefined' && SESSION && SESSION.role === 'admin';
+
+    // Одиночные
+    nav.querySelectorAll('[data-sa-nav-single]').forEach(btn => {
+      btn.classList.toggle('active', btn.getAttribute('data-sa-nav-single') === active.route);
+    });
+
+    // Группы
+    nav.querySelectorAll('[data-sa-group]').forEach(wrapper => {
+      const key = wrapper.getAttribute('data-sa-group');
+      const group = NAV_GROUPS.find(g => g.key === key);
+      if (!group) return;
+      const btn = wrapper.querySelector('[data-sa-group-toggle]');
+      if (btn) btn.classList.toggle('active', isGroupActive(group, active));
+
+      // Пункты внутри
+      const dropdown = wrapper.querySelector('[data-sa-dropdown]');
+      if (!dropdown) return;
+      dropdown.querySelectorAll('[data-sa-nav-item]').forEach(itemBtn => {
+        const itemKey = itemBtn.getAttribute('data-sa-nav-item');
+        const item = group.items.find(i => i.key === itemKey);
+        if (!item) return;
+        itemBtn.classList.toggle('sa-nav-item-active', isItemActive(item, active));
+      });
+    });
+  }
+
+  /* ---------- Открытие/закрытие dropdown ---------- */
+  function openDropdown(key) {
+    const nav = document.getElementById('sa-grouped-nav');
+    if (!nav) return;
+    nav.querySelectorAll('.sa-nav-dropdown').forEach(dd => {
+      dd.style.display = (dd.getAttribute('data-sa-dropdown') === key) ? 'block' : 'none';
+    });
+  }
+  function closeAllDropdowns() {
+    const nav = document.getElementById('sa-grouped-nav');
+    if (!nav) return;
+    nav.querySelectorAll('.sa-nav-dropdown').forEach(dd => dd.style.display = 'none');
+  }
+  function closeAllExcept(key) {
+    const nav = document.getElementById('sa-grouped-nav');
+    if (!nav) return;
+    nav.querySelectorAll('.sa-nav-dropdown').forEach(dd => {
+      if (dd.getAttribute('data-sa-dropdown') !== key) dd.style.display = 'none';
+    });
+  }
+  function isDropdownOpen(key) {
+    const nav = document.getElementById('sa-grouped-nav');
+    if (!nav) return false;
+    const dd = nav.querySelector('[data-sa-dropdown="' + key + '"]');
+    return dd && dd.style.display === 'block';
+  }
+
+  /* ---------- Инициализация обработчиков через event delegation ---------- */
+  function bindEvents() {
+    if (window.__saNavBound) return;
+    window.__saNavBound = true;
+
+    // Клик по всему документу
+    document.addEventListener('click', function(e) {
+      const nav = document.getElementById('sa-grouped-nav');
+      if (!nav) return;
+
+      // 1. Клик по одиночной вкладке
+      const singleBtn = e.target.closest('[data-sa-nav-single]');
+      if (singleBtn && nav.contains(singleBtn)) {
+        e.preventDefault();
+        closeAllDropdowns();
+        location.hash = singleBtn.getAttribute('data-sa-nav-single');
+        return;
+      }
+
+      // 2. Клик по пункту внутри dropdown
+      const itemBtn = e.target.closest('[data-sa-nav-item]');
+      if (itemBtn && nav.contains(itemBtn)) {
+        e.preventDefault();
+        const key = itemBtn.getAttribute('data-sa-nav-item');
+        closeAllDropdowns();
+        location.hash = key;
+        return;
+      }
+
+      // 3. Клик по кнопке группы (открытие/закрытие)
+      const groupBtn = e.target.closest('[data-sa-group-toggle]');
+      if (groupBtn && nav.contains(groupBtn)) {
+        e.preventDefault();
+        e.stopPropagation();
+        const key = groupBtn.getAttribute('data-sa-group-toggle');
+        if (isDropdownOpen(key)) closeAllDropdowns();
+        else { closeAllExcept(key); openDropdown(key); }
+        return;
+      }
+
+      // 4. Клик вне навигации — закрываем все dropdown
+      if (!nav.contains(e.target)) {
+        closeAllDropdowns();
+      }
+    }, true);
+
+    // Наведение — открываем, уход — закрываем с задержкой
+    document.addEventListener('mouseover', function(e) {
+      const nav = document.getElementById('sa-grouped-nav');
+      if (!nav) return;
+      const groupBtn = e.target.closest('[data-sa-group-toggle]');
+      if (groupBtn && nav.contains(groupBtn)) {
+        const key = groupBtn.getAttribute('data-sa-group-toggle');
+        closeAllExcept(key);
+        openDropdown(key);
+      }
+    });
+
+    document.addEventListener('mouseout', function(e) {
+      const nav = document.getElementById('sa-grouped-nav');
+      if (!nav) return;
+      const from = e.target.closest('.sa-nav-group');
+      const to = e.relatedTarget && e.relatedTarget.closest ? e.relatedTarget.closest('.sa-nav-group') : null;
+      if (from && from !== to) {
+        const key = from.getAttribute('data-sa-group');
+        if (key) {
+          setTimeout(function() {
+            const hovered = document.querySelector('.sa-nav-group:hover');
+            if (!hovered || hovered !== from) {
+              const dd = from.querySelector('[data-sa-dropdown="' + key + '"]');
+              if (dd) dd.style.display = 'none';
+            }
+          }, 150);
+        }
+      }
+    });
+
+    // Закрытие при Escape
+    document.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape') closeAllDropdowns();
+    });
+
+    // Обновление активных при смене hash
+    window.addEventListener('hashchange', function() {
+      setTimeout(function() {
+        closeAllDropdowns();
+        updateActive();
+      }, 30);
+    });
+  }
+
+  /* ---------- Запуск ---------- */
   function init() {
     if (typeof SESSION === 'undefined' || !SESSION) return;
+    ensureStyles();
+    replaceNav();
+    bindEvents();
+    console.log('[FIX v2.1] навигация установлена');
+  }
 
-    // Стили для dropdown и адаптивности
-    if (!document.getElementById('sa-grouped-nav-styles')) {
-      const style = document.createElement('style');
-      style.id = 'sa-grouped-nav-styles';
-      style.textContent = `
-        /* Группированная навигация */
-        #sa-grouped-nav {
-          display: flex;
-          align-items: center;
-          background: var(--bg-card, #fff);
-          border-bottom: 2px solid var(--border, #d9e4ec);
-          padding: 0 24px;
-          gap: 4px;
-          overflow-x: auto;
-          position: sticky;
-          top: 66px;
-          z-index: 99;
-          scrollbar-width: none;
-        }
-        #sa-grouped-nav::-webkit-scrollbar { display: none; }
+  // Запуск при загрузке
+  if (document.readyState === 'complete' || document.readyState === 'interactive') {
+    setTimeout(init, 300);
+  } else {
+    window.addEventListener('load', function() { setTimeout(init, 300); });
+  }
 
-        #sa-grouped-nav button {
-          background: none;
-          border: none;
-          padding: 14px 18px;
-          font-size: 14px;
-          cursor: pointer;
-          color: var(--text-muted, #6a7f94);
-          border-bottom: 3px solid transparent;
-          transition: all .18s ease;
-          white-space: nowrap;
-          font-family: 'Roboto', -apple-system, sans-serif;
-          font-weight: 500;
-          min-height: 48px;
-          display: inline-flex;
-          align-items: center;
-          gap: 6px;
-        }
-        #sa-grouped-nav button:hover {
-          color: var(--primary, #04558a);
-          background: var(--bg-hover, #eef4f9);
-        }
-        #sa-grouped-nav button.active {
-          color: var(--primary, #04558a);
-          border-bottom-color: var(--primary, #04558a);
-          font-weight: 600;
-        }
-        #sa-grouped-nav button .icon {
-          width: 16px;
-          height: 16px;
-          stroke-width: 2;
-        }
-        #sa-grouped-nav .sa-nav-group > button .icon:last-child {
-          width: 12px;
-          height: 12px;
-          opacity: .6;
-        }
-
-        /* Тёмная тема */
-        html[data-theme="dark"] #sa-grouped-nav {
-          background: var(--bg-card, #152535);
-          border-bottom-color: var(--border, #24384d);
-        }
-        html[data-theme="dark"] .sa-nav-dropdown {
-          background: var(--bg-card, #152535) !important;
-          border-color: var(--border, #24384d) !important;
-        }
-
-        /* Мобильный режим */
-        html.mobile-mode #sa-grouped-nav {
-          padding: 0 12px;
-          top: 56px;
-        }
-        html.mobile-mode #sa-grouped-nav button {
-          padding: 12px 12px;
-          font-size: 13px;
-        }
-        html.mobile-mode #sa-grouped-nav button .icon {
-          width: 14px;
-          height: 14px;
-        }
-        html.mobile-mode .sa-nav-dropdown {
-          min-width: 180px !important;
-        }
-
-        @media (max-width: 900px) {
-          #sa-grouped-nav {
-            padding: 0 12px;
-            top: 60px;
-          }
-          #sa-grouped-nav button {
-            padding: 12px 14px;
-            font-size: 13px;
-          }
-        }
-        @media (max-width: 640px) {
-          #sa-grouped-nav {
-            top: 56px;
-          }
-          #sa-grouped-nav button {
-            padding: 12px 10px;
-            font-size: 12px;
-          }
-          #sa-grouped-nav button span:not(.sa-badge) {
-            /* оставляем, чтобы было читаемо */
-          }
-        }
-      `;
-      document.head.appendChild(style);
-    }
-
-    // Первый запуск
-    setTimeout(replaceNav, 100);
-
-    // Наблюдаем за перерисовками app — заменяем навигацию, если она вернулась к исходному виду
+  // Однократное наблюдение: если кто-то заменит nav — перестроим
+  // Но перестраиваем только при появлении нового nav, не при каждом мутации
+  function watchNav() {
     const app = document.getElementById('app');
-    if (app && !window.__saNavObserver) {
-      const observer = new MutationObserver(() => {
-        const nav = app.querySelector('nav.tabs');
-        if (nav && nav.id !== 'sa-grouped-nav') {
-          replaceNav();
+    if (!app || window.__saNavWatch) return;
+    window.__saNavWatch = true;
+    const observer = new MutationObserver(function(mutations) {
+      for (const m of mutations) {
+        for (const node of m.addedNodes) {
+          if (node.nodeType === 1 && node.tagName === 'NAV' && node.classList.contains('tabs') && node.id !== 'sa-grouped-nav') {
+            // Другой модуль вставил свой nav — заменяем
+            setTimeout(replaceNav, 20);
+            return;
+          }
         }
-      });
-      observer.observe(app, { childList: true, subtree: false });
-      window.__saNavObserver = observer;
-    }
-
-    // После смены hash — обновляем активные кнопки
-    window.addEventListener('hashchange', () => {
-      setTimeout(replaceNav, 50);
-    }, true);
+      }
+    });
+    observer.observe(app, { childList: true });
   }
 
   if (document.readyState === 'complete' || document.readyState === 'interactive') {
-    setTimeout(init, 400);
+    setTimeout(watchNav, 500);
   } else {
-    window.addEventListener('load', () => setTimeout(init, 400));
+    window.addEventListener('load', function() { setTimeout(watchNav, 500); });
   }
 
-  console.log('[FIX v2.0] Группированная навигация установлена');
+  console.log('[FIX v2.1] модуль загружен');
 })();
 </script>
 </body>
