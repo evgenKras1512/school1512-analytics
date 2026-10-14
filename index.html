@@ -6811,5 +6811,1051 @@ if (SESSION) render();
   console.log('[FIX diag-nav] установлен');
 })();
 </script>
+<script>
+/* ============================================================
+   МОДУЛЬ «ОТЧЁТЫ» v1.0
+   1) Качество знаний по школе
+   2) Рейтинг классов с динамикой
+   3) Мониторинг неуспевающих
+   Автономный модуль — не трогает существующий код
+   ============================================================ */
+(function() {
+  'use strict';
+
+  /* ---------- Фолбэки ---------- */
+  function _esc(s) { return (typeof esc === 'function') ? esc(s) : String(s ?? ''); }
+  function _icon(name, size) {
+    if (typeof icon === 'function') return icon(name, size || 16);
+    return '';
+  }
+  function _toast(msg, type) {
+    if (typeof showToast === 'function') { showToast(msg, type); return; }
+    console.log(msg);
+  }
+  function _fullName(s) {
+    if (typeof fullName === 'function') return fullName(s);
+    return `${s.lastName} ${s.firstName}`;
+  }
+  function _finalGrade(sid, subject) {
+    if (typeof finalGrade === 'function') return finalGrade(sid, subject);
+    const gs = DB.getGrades().filter(g => g.studentId === sid && g.subject === subject);
+    if (!gs.length) return '';
+    let x = gs.find(g => g.period === 'Год' && g.type === 'итоговая');
+    if (x) return x.value;
+    x = gs.find(g => g.period === 'Год');
+    if (x) return x.value;
+    return gs[gs.length - 1].value;
+  }
+  function _today() {
+    if (typeof todayStr === 'function') return todayStr();
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  }
+  function _allowedClasses() {
+    if (typeof allowedClasses === 'function') return allowedClasses();
+    return DB.getClasses();
+  }
+  function _allowedStudents() {
+    if (typeof allowedStudents === 'function') return allowedStudents();
+    const clsIds = _allowedClasses().map(c => c.id);
+    return DB.getStudents().filter(s => clsIds.includes(s.classId));
+  }
+
+  /* ============================================================
+     ВЫЧИСЛЕНИЯ
+     ============================================================ */
+
+  // Считаем по предмету: средний балл, качество (% «4» и «5»), кол-во оценок
+  function computeSubjectStats(subject, options) {
+    options = options || {};
+    const classes = _allowedClasses();
+    const students = _allowedStudents().filter(s => {
+      if (options.classId) return s.classId === options.classId;
+      return true;
+    });
+    const sids = students.map(s => s.id);
+
+    let sum = 0, cnt = 0;
+    let excellent = 0, good = 0, satisfactory = 0, poor = 0;
+
+    // Берём итоговые оценки за год, если есть; иначе — все оценки
+    const useFinal = options.useFinal !== false;
+
+    students.forEach(s => {
+      const v = _finalGrade(s.id, subject);
+      if (/^[2-5]$/.test(v)) {
+        sum += +v; cnt++;
+        if (v === '5') excellent++;
+        else if (v === '4') good++;
+        else if (v === '3') satisfactory++;
+        else if (v === '2') poor++;
+      }
+    });
+
+    const avg = cnt ? sum / cnt : 0;
+    const quality = cnt ? Math.round((excellent + good) / cnt * 100) : 0;
+    const success = cnt ? Math.round((excellent + good + satisfactory) / cnt * 100) : 0;
+
+    return {
+      subject,
+      count: cnt,
+      avg: +avg.toFixed(2),
+      quality,
+      success,
+      excellent,
+      good,
+      satisfactory,
+      poor,
+    };
+  }
+
+  // Средний балл класса по всем предметам
+  function computeClassStats(classId) {
+    const classObj = DB.getClasses().find(c => c.id === classId);
+    if (!classObj) return null;
+    const students = DB.getStudents().filter(s => s.classId === classId);
+    const subjects = DB.getSubjects();
+
+    let totalSum = 0, totalCnt = 0;
+    let excellent = 0, good = 0, satisfactory = 0, poor = 0;
+
+    students.forEach(s => {
+      let sSum = 0, sCnt = 0;
+      subjects.forEach(sub => {
+        const v = _finalGrade(s.id, sub);
+        if (/^[2-5]$/.test(v)) {
+          totalSum += +v; totalCnt++;
+          sSum += +v; sCnt++;
+        }
+      });
+      const sAvg = sCnt ? sSum / sCnt : 0;
+      if (sAvg >= 4.5) excellent++;
+      else if (sAvg >= 3.5) good++;
+      else if (sAvg >= 2.5) satisfactory++;
+      else if (sCnt > 0) poor++;
+    });
+
+    const avg = totalCnt ? totalSum / totalCnt : 0;
+    const quality = students.length ? Math.round((excellent + good) / students.length * 100) : 0;
+
+    return {
+      classObj,
+      students: students.length,
+      avg: +avg.toFixed(2),
+      quality,
+      excellent,
+      good,
+      satisfactory,
+      poor,
+      totalGrades: totalCnt,
+    };
+  }
+
+  // Динамика: сравнение последней четверти с предыдущей
+  function computeClassDynamics(classId) {
+    const students = DB.getStudents().filter(s => s.classId === classId);
+    const sids = students.map(s => s.id);
+    const grades = DB.getGrades().filter(g => sids.includes(g.studentId) && /^[2-5]$/.test(g.value));
+
+    const periods = ['I четверть', 'II четверть', 'III четверть', 'IV четверть'];
+    const byPeriod = {};
+    periods.forEach(p => {
+      const gs = grades.filter(g => g.period === p);
+      byPeriod[p] = gs.length ? gs.reduce((a,b) => a + +b.value, 0) / gs.length : null;
+    });
+
+    // Ищем две последние четверти с данными
+    let last = null, prev = null;
+    for (let i = periods.length - 1; i >= 0; i--) {
+      if (byPeriod[periods[i]] !== null) {
+        if (last === null) last = { period: periods[i], avg: byPeriod[periods[i]] };
+        else if (prev === null) { prev = { period: periods[i], avg: byPeriod[periods[i]] }; break; }
+      }
+    }
+
+    if (!last || !prev) return { diff: 0, last, prev, hasData: false };
+
+    const diff = +(last.avg - prev.avg).toFixed(2);
+    return { diff, last, prev, hasData: true };
+  }
+
+  // Ученики с проблемами
+  function findStrugglingStudents(options) {
+    options = options || {};
+    const students = _allowedStudents();
+    const subjects = DB.getSubjects();
+    const result = [];
+
+    students.forEach(s => {
+      if (options.classId && s.classId !== options.classId) return;
+
+      // Собираем проблемы ученика
+      const problems = [];
+      let totalSum = 0, totalCnt = 0;
+      let countTwos = 0;
+
+      subjects.forEach(sub => {
+        if (options.subject && sub !== options.subject) return;
+
+        const grades = DB.getGrades().filter(g =>
+          g.studentId === s.id && g.subject === sub && /^[2-5]$/.test(g.value)
+        );
+
+        // Двойки
+        grades.forEach(g => {
+          if (g.value === '2') {
+            countTwos++;
+            problems.push({
+              subject: sub,
+              type: 'two',
+              period: g.period,
+              gradeType: g.type,
+            });
+          }
+        });
+
+        // Средний балл по предмету
+        if (grades.length) {
+          const subAvg = grades.reduce((a,g) => a + +g.value, 0) / grades.length;
+          totalSum += grades.reduce((a,g) => a + +g.value, 0);
+          totalCnt += grades.length;
+
+          if (subAvg < 3.0) {
+            problems.push({
+              subject: sub,
+              type: 'low_avg',
+              avg: +subAvg.toFixed(2),
+            });
+          }
+        }
+      });
+
+      const overallAvg = totalCnt ? +(totalSum / totalCnt).toFixed(2) : 0;
+
+      // Фильтр: если есть двойки или средний балл ниже 3.0
+      if (problems.length > 0 || (overallAvg > 0 && overallAvg < 3.0)) {
+        // Фильтр по учителю
+        if (options.teacherId) {
+          // Оставляем учеников, у которых есть проблемы по предметам этого учителя
+          const teacherSubjects = DB.getSubjectTeachers()
+            .filter(st => st.teacherId === options.teacherId && st.classId === s.classId)
+            .map(st => st.subject);
+          const hasTeacherProblem = problems.some(p => teacherSubjects.includes(p.subject));
+          if (!hasTeacherProblem) return;
+        }
+
+        result.push({
+          student: s,
+          classObj: DB.getClasses().find(c => c.id === s.classId),
+          overallAvg,
+          countTwos,
+          problems,
+          problemSubjects: [...new Set(problems.map(p => p.subject))],
+        });
+      }
+    });
+
+    // Сортировка: сначала самые проблемные
+    result.sort((a, b) => {
+      if (b.countTwos !== a.countTwos) return b.countTwos - a.countTwos;
+      return a.overallAvg - b.overallAvg;
+    });
+
+    return result;
+  }
+
+  /* ============================================================
+     UI — СТРАНИЦА ОТЧЁТОВ
+     ============================================================ */
+  window.openReports = function(subtab) {
+    subtab = subtab || 'quality';
+    if (location.hash.startsWith('#reports')) {
+      renderReportsPage(subtab);
+      return;
+    }
+    location.hash = 'reports/' + subtab;
+  };
+
+  window.reportsGo = function(subtab) {
+    location.hash = 'reports/' + subtab;
+  };
+
+  function renderReportsPage(subtab) {
+    if (!SESSION) { if (typeof renderLogin === 'function') renderLogin(); return; }
+    if (SESSION.role !== 'admin' && SESSION.role !== 'director') {
+      _toast('Нет доступа к разделу', 'error');
+      if (typeof renderDashboard === 'function') renderDashboard();
+      return;
+    }
+
+    let body = '';
+    if (subtab === 'quality') body = renderQualityTab();
+    else if (subtab === 'rating') body = renderRatingTab();
+    else if (subtab === 'struggling') body = renderStrugglingTab();
+    else body = renderQualityTab();
+
+    const tabs = `
+      <div class="subtabs">
+        <button class="${subtab==='quality'?'active':''}" onclick="reportsGo('quality')">
+          ${_icon('award', 14)} Качество знаний
+        </button>
+        <button class="${subtab==='rating'?'active':''}" onclick="reportsGo('rating')">
+          ${_icon('chart', 14)} Рейтинг классов
+        </button>
+        <button class="${subtab==='struggling'?'active':''}" onclick="reportsGo('struggling')">
+          ${_icon('alert', 14)} Неуспевающие
+        </button>
+      </div>`;
+
+    const headerHtml = (typeof renderHeader === 'function') ? renderHeader() : '';
+    const navHtml = (typeof renderNav === 'function') ? renderNav('reports') : '';
+
+    document.getElementById('app').innerHTML = headerHtml + navHtml +
+      `<main>
+        <h1 style="margin-bottom:16px;color:var(--primary);">${_icon('bar-chart', 28)} Аналитические отчёты</h1>
+        ${tabs}
+        ${body}
+      </main>`;
+
+    if (typeof initSwipe === 'function') setTimeout(initSwipe, 50);
+    setTimeout(afterReportsRender, 100);
+  }
+
+  window.renderReportsPage = renderReportsPage;
+
+  /* ============================================================
+     ВКЛАДКА 1 — КАЧЕСТВО ЗНАНИЙ ПО ШКОЛЕ
+     ============================================================ */
+  function renderQualityTab() {
+    const subjects = usedSubjects ? usedSubjects() : DB.getSubjects();
+    const stats = subjects.map(sub => computeSubjectStats(sub));
+
+    // Общая сводка по школе
+    let totalCnt = 0, totalSum = 0, totalQualityCnt = 0;
+    stats.forEach(s => {
+      totalSum += s.avg * s.count;
+      totalCnt += s.count;
+      totalQualityCnt += s.excellent + s.good;
+    });
+    const schoolAvg = totalCnt ? +(totalSum / totalCnt).toFixed(2) : 0;
+    const schoolQuality = totalCnt ? Math.round(totalQualityCnt / totalCnt * 100) : 0;
+
+    // Сортируем: сначала проблемные
+    const sorted = [...stats].sort((a, b) => a.quality - b.quality);
+
+    // Топ проблемных
+    const worst = sorted.slice(0, 3).filter(s => s.quality < 60);
+
+    const rows = sorted.map(s => {
+      const qualityColor = s.quality >= 70 ? 'var(--success)' : s.quality >= 50 ? 'var(--warning)' : 'var(--danger)';
+      const avgColor = s.avg >= 4.0 ? 'var(--success)' : s.avg >= 3.5 ? 'var(--primary)' : s.avg >= 3.0 ? 'var(--warning)' : 'var(--danger)';
+      return `<tr>
+        <td><b>${_esc(s.subject)}</b></td>
+        <td class="text-right">${s.count}</td>
+        <td class="text-right"><b style="color:${avgColor};">${s.avg}</b></td>
+        <td class="text-right"><b style="color:${qualityColor};">${s.quality}%</b></td>
+        <td class="text-right">${s.success}%</td>
+        <td class="text-right" style="font-size:12px;color:var(--text-muted);">
+          ${s.excellent} / ${s.good} / ${s.satisfactory} / ${s.poor}
+        </td>
+      </tr>`;
+    }).join('');
+
+    return `
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="num">${subjects.length}</div>
+          <div class="lbl">Предметов</div>
+        </div>
+        <div class="stat-card">
+          <div class="num">${totalCnt}</div>
+          <div class="lbl">Итоговых оценок</div>
+        </div>
+        <div class="stat-card">
+          <div class="num" style="color:${schoolAvg >= 4.0 ? 'var(--success)' : schoolAvg >= 3.5 ? 'var(--primary)' : 'var(--warning)'};">
+            ${schoolAvg}
+          </div>
+          <div class="lbl">Средний балл по школе</div>
+        </div>
+        <div class="stat-card">
+          <div class="num" style="color:${schoolQuality >= 70 ? 'var(--success)' : schoolQuality >= 50 ? 'var(--warning)' : 'var(--danger)'};">
+            ${schoolQuality}%
+          </div>
+          <div class="lbl">Качество знаний</div>
+        </div>
+      </div>
+
+      ${worst.length ? `<div class="card">
+        <h2>${_icon('alert', 18)} Западающие предметы</h2>
+        <div class="row-flex" style="gap:12px;flex-wrap:wrap;">
+          ${worst.map(s => {
+            const color = s.quality >= 50 ? 'var(--warning)' : 'var(--danger)';
+            return `
+              <div class="card" style="flex:1;min-width:220px;margin:0;border-left:4px solid ${color};">
+                <div style="font-weight:700;color:var(--primary);margin-bottom:6px;">${_esc(s.subject)}</div>
+                <div style="font-size:28px;font-weight:700;color:${color};">${s.quality}%</div>
+                <div class="muted">средний балл ${s.avg} · оценок ${s.count}</div>
+              </div>`;
+          }).join('')}
+        </div>
+      </div>` : ''}
+
+      <div class="card">
+        <div class="row-flex" style="justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
+          <h2 style="margin:0;">${_icon('award', 18)} Качество знаний по предметам</h2>
+          <button class="btn btn-success btn-sm" onclick="reportsExportQualityXlsx()">
+            ${_icon('file-excel', 14)} Excel
+          </button>
+        </div>
+        <div class="alert alert-info" style="font-size:13px;">
+          ${_icon('info', 14)} «Качество знаний» — доля учеников с оценками «4» и «5» среди тех, у кого есть итоговая оценка.
+          В колонке «5/4/3/2» — количество учеников по каждой категории.
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr>
+              <th>Предмет</th>
+              <th class="text-right">Оценок</th>
+              <th class="text-right">Средний балл</th>
+              <th class="text-right">Качество</th>
+              <th class="text-right">Успеваемость</th>
+              <th class="text-right">5 / 4 / 3 / 2</th>
+            </tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>${_icon('chart', 18)} Рейтинг предметов по качеству знаний</h2>
+        <div class="chart-box-lg"><canvas id="qualityChart"></canvas></div>
+      </div>
+
+      <script>window._qualityChartData = ${JSON.stringify(sorted.map(s => ({
+        subject: s.subject, quality: s.quality, avg: s.avg
+      })))};<\/script>
+    `;
+  }
+
+  /* ============================================================
+     ВКЛАДКА 2 — РЕЙТИНГ КЛАССОВ
+     ============================================================ */
+  function renderRatingTab() {
+    const classes = _allowedClasses();
+    const data = classes.map(c => {
+      const stats = computeClassStats(c.id);
+      const dyn = computeClassDynamics(c.id);
+      return { ...stats, dyn };
+    }).filter(Boolean);
+
+    // Сортировка по среднему баллу
+    const sorted = [...data].sort((a, b) => b.avg - a.avg);
+    const withMedals = sorted.map((x, i) => ({ ...x, rank: i + 1 }));
+
+    const rows = withMedals.map(x => {
+      const medal = x.rank <= 3 ? ['🥇','🥈','🥉'][x.rank-1] : x.rank;
+      const avgColor = x.avg >= 4.0 ? 'var(--success)' : x.avg >= 3.5 ? 'var(--primary)' : x.avg >= 3.0 ? 'var(--warning)' : 'var(--danger)';
+      const qualityColor = x.quality >= 70 ? 'var(--success)' : x.quality >= 50 ? 'var(--warning)' : 'var(--danger)';
+      let dynHtml = '—';
+      if (x.dyn.hasData) {
+        const arrow = x.dyn.diff > 0 ? '↑' : x.dyn.diff < 0 ? '↓' : '→';
+        const color = x.dyn.diff > 0 ? 'var(--success)' : x.dyn.diff < 0 ? 'var(--danger)' : 'var(--text-muted)';
+        const sign = x.dyn.diff > 0 ? '+' : '';
+        dynHtml = `<b style="color:${color};">${arrow} ${sign}${x.dyn.diff}</b>`;
+      }
+      return `<tr>
+        <td><b>${medal}</b></td>
+        <td><b>${_esc(x.classObj.name)}</b></td>
+        <td class="text-right">${x.students}</td>
+        <td class="text-right"><b style="color:${avgColor};">${x.avg}</b></td>
+        <td class="text-right"><b style="color:${qualityColor};">${x.quality}%</b></td>
+        <td class="text-right">${dynHtml}</td>
+        <td class="text-right" style="font-size:12px;color:var(--text-muted);">
+          ${x.excellent} / ${x.good} / ${x.satisfactory} / ${x.poor}
+        </td>
+      </tr>`;
+    }).join('');
+
+    // Топ-3 растущих и падающих
+    const withDyn = data.filter(x => x.dyn.hasData);
+    const growing = [...withDyn].sort((a, b) => b.dyn.diff - a.dyn.diff).slice(0, 3).filter(x => x.dyn.diff > 0);
+    const falling = [...withDyn].sort((a, b) => a.dyn.diff - b.dyn.diff).slice(0, 3).filter(x => x.dyn.diff < 0);
+
+    return `
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="num">${classes.length}</div>
+          <div class="lbl">Классов</div>
+        </div>
+        <div class="stat-card">
+          <div class="num">${data.reduce((a,x) => a + x.students, 0)}</div>
+          <div class="lbl">Учеников</div>
+        </div>
+        <div class="stat-card">
+          <div class="num" style="color:var(--success);">${growing.length}</div>
+          <div class="lbl">Растут в динамике</div>
+        </div>
+        <div class="stat-card">
+          <div class="num" style="color:var(--danger);">${falling.length}</div>
+          <div class="lbl">Падают в динамике</div>
+        </div>
+      </div>
+
+      ${growing.length ? `<div class="card">
+        <h2>${_icon('trending-up', 18)} Растущие классы</h2>
+        <div class="row-flex" style="gap:12px;flex-wrap:wrap;">
+          ${growing.map(x => `
+            <div class="card" style="flex:1;min-width:200px;margin:0;border-left:4px solid var(--success);">
+              <div style="font-weight:700;color:var(--primary);margin-bottom:6px;">${_esc(x.classObj.name)}</div>
+              <div style="font-size:24px;font-weight:700;color:var(--success);">↑ +${x.dyn.diff}</div>
+              <div class="muted">средний балл ${x.avg}</div>
+            </div>
+          `).join('')}
+        </div>
+      </div>` : ''}
+
+      ${falling.length ? `<div class="card">
+        <h2>${_icon('trending-down', 18)} Падающие классы</h2>
+        <div class="row-flex" style="gap:12px;flex-wrap:wrap;">
+          ${falling.map(x => `
+            <div class="card" style="flex:1;min-width:200px;margin:0;border-left:4px solid var(--danger);">
+              <div style="font-weight:700;color:var(--primary);margin-bottom:6px;">${_esc(x.classObj.name)}</div>
+              <div style="font-size:24px;font-weight:700;color:var(--danger);">↓ ${x.dyn.diff}</div>
+              <div class="muted">средний балл ${x.avg}</div>
+            </div>
+          `).join('')}
+        </div>
+      </div>` : ''}
+
+      <div class="card">
+        <div class="row-flex" style="justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
+          <h2 style="margin:0;">${_icon('chart', 18)} Рейтинг классов</h2>
+          <button class="btn btn-success btn-sm" onclick="reportsExportRatingXlsx()">
+            ${_icon('file-excel', 14)} Excel
+          </button>
+        </div>
+        <div class="alert alert-info" style="font-size:13px;">
+          ${_icon('info', 14)} Динамика — разница среднего балла между последней и предыдущей четвертями с данными.
+          ↑ значит класс растёт, ↓ значит падает.
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr>
+              <th>#</th>
+              <th>Класс</th>
+              <th class="text-right">Учеников</th>
+              <th class="text-right">Средний балл</th>
+              <th class="text-right">Качество</th>
+              <th class="text-right">Динамика</th>
+              <th class="text-right">5 / 4 / 3 / 2</th>
+            </tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>${_icon('bar-chart', 18)} Средний балл по классам</h2>
+        <div class="chart-box-lg"><canvas id="ratingChart"></canvas></div>
+      </div>
+
+      <script>window._ratingChartData = ${JSON.stringify(sorted.map(x => ({
+        name: x.classObj.name, avg: x.avg, quality: x.quality
+      })))};<\/script>
+    `;
+  }
+
+  /* ============================================================
+     ВКЛАДКА 3 — НЕУСПЕВАЮЩИЕ
+     ============================================================ */
+  let strugglingFilter = {
+    classId: '',
+    subject: '',
+    teacherId: '',
+    minAvg: 3.0,
+    onlyTwos: false,
+  };
+
+  function renderStrugglingTab() {
+    const classes = _allowedClasses();
+    const subjects = usedSubjects ? usedSubjects() : DB.getSubjects();
+    const teachersList = DB.getSubjectTeachersList();
+
+    const list = findStrugglingStudents({
+      classId: strugglingFilter.classId ? +strugglingFilter.classId : null,
+      subject: strugglingFilter.subject || null,
+      teacherId: strugglingFilter.teacherId ? +strugglingFilter.teacherId : null,
+    });
+
+    // Дополнительные фильтры
+    let filtered = list.filter(x => x.overallAvg < strugglingFilter.minAvg || x.countTwos > 0);
+    if (strugglingFilter.onlyTwos) {
+      filtered = filtered.filter(x => x.countTwos > 0);
+    }
+
+    // Сводка
+    const totalTwos = filtered.reduce((a, x) => a + x.countTwos, 0);
+    const withTwos = filtered.filter(x => x.countTwos > 0).length;
+    const lowAvg = filtered.filter(x => x.overallAvg > 0 && x.overallAvg < 3.0).length;
+
+    // Группировка по классам для передачи классному руководителю
+    const byClass = {};
+    filtered.forEach(x => {
+      const cn = x.classObj ? x.classObj.name : '—';
+      if (!byClass[cn]) byClass[cn] = [];
+      byClass[cn].push(x);
+    });
+
+    const rows = filtered.map(x => {
+      const avgColor = x.overallAvg >= 3.0 ? 'var(--warning)' : 'var(--danger)';
+      const problemText = x.problemSubjects.map(sub => {
+        const subProblems = x.problems.filter(p => p.subject === sub);
+        const hasTwo = subProblems.some(p => p.type === 'two');
+        const hasLowAvg = subProblems.some(p => p.type === 'low_avg');
+        const parts = [];
+        if (hasTwo) parts.push(`двойки (${subProblems.filter(p => p.type === 'two').length})`);
+        if (hasLowAvg) {
+          const low = subProblems.find(p => p.type === 'low_avg');
+          parts.push(`ср. ${low.avg}`);
+        }
+        return `<div style="margin-bottom:4px;"><b>${_esc(sub)}</b> — ${parts.join(', ')}</div>`;
+      }).join('');
+      return `<tr>
+        <td class="nowrap"><b>${_esc(_fullName(x.student))}</b></td>
+        <td class="nowrap">${_esc(x.classObj ? x.classObj.name : '—')}</td>
+        <td class="text-right"><b style="color:${avgColor};">${x.overallAvg || '—'}</b></td>
+        <td class="text-right">
+          ${x.countTwos > 0 ? `<span class="badge badge-red">${x.countTwos}</span>` : '—'}
+        </td>
+        <td style="font-size:13px;">${problemText || '—'}</td>
+        <td class="text-right nowrap">
+          <button class="btn btn-outline btn-sm btn-icon" onclick="location.hash='student/${x.student.id}'" title="Карточка">${_icon('user', 12)}</button>
+        </td>
+      </tr>`;
+    }).join('');
+
+    const classRows = Object.entries(byClass).map(([cn, items]) => `
+      <tr>
+        <td><b>${_esc(cn)}</b></td>
+        <td class="text-right">${items.length}</td>
+        <td class="text-right">${items.reduce((a,x) => a + x.countTwos, 0)}</td>
+        <td class="text-right">
+          <button class="btn btn-outline btn-sm" onclick="reportsCopyClassList('${_esc(cn)}')" title="Скопировать список в буфер">
+            ${_icon('file-pdf', 12)} Скопировать
+          </button>
+        </td>
+      </tr>
+    `).join('');
+
+    return `
+      <div class="stats-grid">
+        <div class="stat-card" style="border-left-color:var(--danger);">
+          <div class="num" style="color:var(--danger);">${filtered.length}</div>
+          <div class="lbl">Учеников в зоне риска</div>
+        </div>
+        <div class="stat-card" style="border-left-color:var(--danger);">
+          <div class="num" style="color:var(--danger);">${withTwos}</div>
+          <div class="lbl">С двойками</div>
+        </div>
+        <div class="stat-card" style="border-left-color:var(--warning);">
+          <div class="num" style="color:var(--warning);">${lowAvg}</div>
+          <div class="lbl">Средний балл &lt; 3.0</div>
+        </div>
+        <div class="stat-card">
+          <div class="num">${totalTwos}</div>
+          <div class="lbl">Всего двоек</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>${_icon('settings', 18)} Фильтры</h2>
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Класс</label>
+            <select onchange="strugglingFilter.classId=this.value;renderReportsPage('struggling');">
+              <option value="">Все классы</option>
+              ${classes.map(c => `<option value="${c.id}" ${strugglingFilter.classId==c.id?'selected':''}>${_esc(c.name)}</option>`).join('')}
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Предмет</label>
+            <select onchange="strugglingFilter.subject=this.value;renderReportsPage('struggling');">
+              <option value="">Все предметы</option>
+              ${subjects.map(s => `<option ${strugglingFilter.subject===s?'selected':''}>${_esc(s)}</option>`).join('')}
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Учитель</label>
+            <select onchange="strugglingFilter.teacherId=this.value;renderReportsPage('struggling');">
+              <option value="">Все учителя</option>
+              ${teachersList.map(t => `<option value="${t.id}" ${strugglingFilter.teacherId==t.id?'selected':''}>${_esc(t.name)}</option>`).join('')}
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Порог среднего балла</label>
+            <select onchange="strugglingFilter.minAvg=+this.value;renderReportsPage('struggling');">
+              <option value="2.5" ${strugglingFilter.minAvg==2.5?'selected':''}>Ниже 2.5</option>
+              <option value="3.0" ${strugglingFilter.minAvg==3.0?'selected':''}>Ниже 3.0</option>
+              <option value="3.5" ${strugglingFilter.minAvg==3.5?'selected':''}>Ниже 3.5</option>
+              <option value="4.0" ${strugglingFilter.minAvg==4.0?'selected':''}>Ниже 4.0</option>
+            </select>
+          </div>
+        </div>
+        <div class="mt-16">
+          <label style="font-size:13px;font-weight:600;cursor:pointer;">
+            <input type="checkbox" ${strugglingFilter.onlyTwos?'checked':''}
+                   onchange="strugglingFilter.onlyTwos=this.checked;renderReportsPage('struggling');">
+            Показывать только учеников с двойками
+          </label>
+        </div>
+      </div>
+
+      ${filtered.length ? `
+        <div class="card">
+          <div class="row-flex" style="justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
+            <h2 style="margin:0;">${_icon('alert', 18)} Список неуспевающих (${filtered.length})</h2>
+            <div class="btn-group">
+              <button class="btn btn-success btn-sm" onclick="reportsExportStrugglingXlsx()">
+                ${_icon('file-excel', 14)} Excel
+              </button>
+              <button class="btn btn-outline btn-sm" onclick="reportsCopyAllStruggling()">
+                ${_icon('download', 14)} Скопировать всё
+              </button>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr>
+                <th>ФИО</th>
+                <th>Класс</th>
+                <th class="text-right">Ср. балл</th>
+                <th class="text-right">Двоек</th>
+                <th>Проблемы</th>
+                <th></th>
+              </tr></thead>
+              <tbody>${rows}</tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>${_icon('users', 18)} По классам (для передачи классным руководителям)</h2>
+          <div class="table-wrap">
+            <table>
+              <thead><tr>
+                <th>Класс</th>
+                <th class="text-right">Учеников</th>
+                <th class="text-right">Двоек</th>
+                <th></th>
+              </tr></thead>
+              <tbody>${classRows}</tbody>
+            </table>
+          </div>
+        </div>
+      ` : `
+        <div class="card">
+          <div class="empty">
+            <div class="empty-icon">✓</div>
+            <div>Неуспевающих нет по выбранным фильтрам</div>
+          </div>
+        </div>
+      `}
+    `;
+  }
+
+  /* ---------- Копирование списков ---------- */
+  window.reportsCopyClassList = function(className) {
+    const list = findStrugglingStudents({
+      classId: strugglingFilter.classId ? +strugglingFilter.classId : null,
+    }).filter(x => x.classObj && x.classObj.name === className);
+
+    const text = `Список неуспевающих — класс ${className}\n\n`
+      + list.map((x, i) => {
+        const problems = x.problemSubjects.join(', ');
+        return `${i+1}. ${_fullName(x.student)} — ср. балл ${x.overallAvg}, двоек ${x.countTwos}. Проблемы: ${problems}`;
+      }).join('\n');
+
+    navigator.clipboard.writeText(text).then(() => {
+      _toast('Список скопирован в буфер', 'success');
+    }).catch(() => {
+      prompt('Скопируйте текст:', text);
+    });
+  };
+
+  window.reportsCopyAllStruggling = function() {
+    const list = findStrugglingStudents({
+      classId: strugglingFilter.classId ? +strugglingFilter.classId : null,
+      subject: strugglingFilter.subject || null,
+      teacherId: strugglingFilter.teacherId ? +strugglingFilter.teacherId : null,
+    }).filter(x => x.overallAvg < strugglingFilter.minAvg || x.countTwos > 0);
+
+    const text = `Список неуспевающих по школе (${_today()})\n\n`
+      + list.map((x, i) => {
+        const cn = x.classObj ? x.classObj.name : '—';
+        const problems = x.problemSubjects.join(', ');
+        return `${i+1}. ${_fullName(x.student)} (${cn}) — ср. балл ${x.overallAvg}, двоек ${x.countTwos}. Проблемы: ${problems}`;
+      }).join('\n');
+
+    navigator.clipboard.writeText(text).then(() => {
+      _toast('Список скопирован в буфер', 'success');
+    }).catch(() => {
+      prompt('Скопируйте текст:', text);
+    });
+  };
+
+  /* ============================================================
+     ЭКСПОРТ В EXCEL
+     ============================================================ */
+  window.reportsExportQualityXlsx = function() {
+    if (typeof XLSX === 'undefined') { _toast('XLSX не загружен', 'error'); return; }
+    const subjects = usedSubjects ? usedSubjects() : DB.getSubjects();
+    const stats = subjects.map(sub => computeSubjectStats(sub));
+    const sorted = [...stats].sort((a, b) => a.quality - b.quality);
+
+    const rows = [['Предмет', 'Оценок', 'Средний балл', 'Качество %', 'Успеваемость %', 'Отлично (5)', 'Хорошо (4)', 'Удовл. (3)', 'Неуд. (2)']];
+    const colored = [];
+    sorted.forEach((s, i) => {
+      rows.push([s.subject, s.count, s.avg, s.quality, s.success, s.excellent, s.good, s.satisfactory, s.poor]);
+      const bg = s.quality >= 70 ? 'C6F6D5' : s.quality >= 50 ? 'FEFCBF' : 'FED7D7';
+      colored.push({ r: i+1, c: 3, bg, bold: true });
+    });
+
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    ws['!cols'] = [{wch:30},{wch:10},{wch:14},{wch:12},{wch:16},{wch:12},{wch:12},{wch:12},{wch:12}];
+    colored.forEach(c => {
+      const addr = XLSX.utils.encode_cell({ r: c.r, c: c.c });
+      if (ws[addr]) ws[addr].s = { fill: { fgColor: { rgb: c.bg } }, font: { bold: c.bold } };
+    });
+    XLSX.utils.book_append_sheet(wb, ws, 'Качество знаний');
+    XLSX.writeFile(wb, `Качество_знаний_${_today()}.xlsx`);
+    _toast('Excel сохранён', 'success');
+  };
+
+  window.reportsExportRatingXlsx = function() {
+    if (typeof XLSX === 'undefined') { _toast('XLSX не загружен', 'error'); return; }
+    const classes = _allowedClasses();
+    const data = classes.map(c => {
+      const stats = computeClassStats(c.id);
+      const dyn = computeClassDynamics(c.id);
+      return { ...stats, dyn };
+    }).filter(Boolean).sort((a, b) => b.avg - a.avg);
+
+    const rows = [['#', 'Класс', 'Учеников', 'Средний балл', 'Качество %', 'Динамика', 'Отлично', 'Хорошо', 'Удовл.', 'Неуд.']];
+    const colored = [];
+    data.forEach((x, i) => {
+      rows.push([
+        i+1, x.classObj.name, x.students, x.avg, x.quality,
+        x.dyn.hasData ? x.dyn.diff : '—',
+        x.excellent, x.good, x.satisfactory, x.poor
+      ]);
+      const bg = x.avg >= 4.0 ? 'C6F6D5' : x.avg >= 3.5 ? 'BEE3F8' : x.avg >= 3.0 ? 'FEFCBF' : 'FED7D7';
+      colored.push({ r: i+1, c: 3, bg, bold: true });
+      if (x.dyn.hasData) {
+        const dbg = x.dyn.diff > 0 ? 'C6F6D5' : x.dyn.diff < 0 ? 'FED7D7' : 'FFFFFF';
+        colored.push({ r: i+1, c: 5, bg: dbg, bold: true });
+      }
+    });
+
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    ws['!cols'] = [{wch:6},{wch:12},{wch:12},{wch:14},{wch:12},{wch:12},{wch:10},{wch:10},{wch:10},{wch:10}];
+    colored.forEach(c => {
+      const addr = XLSX.utils.encode_cell({ r: c.r, c: c.c });
+      if (ws[addr]) ws[addr].s = { fill: { fgColor: { rgb: c.bg } }, font: { bold: c.bold } };
+    });
+    XLSX.utils.book_append_sheet(wb, ws, 'Рейтинг классов');
+    XLSX.writeFile(wb, `Рейтинг_классов_${_today()}.xlsx`);
+    _toast('Excel сохранён', 'success');
+  };
+
+  window.reportsExportStrugglingXlsx = function() {
+    if (typeof XLSX === 'undefined') { _toast('XLSX не загружен', 'error'); return; }
+    const list = findStrugglingStudents({
+      classId: strugglingFilter.classId ? +strugglingFilter.classId : null,
+      subject: strugglingFilter.subject || null,
+      teacherId: strugglingFilter.teacherId ? +strugglingFilter.teacherId : null,
+    }).filter(x => x.overallAvg < strugglingFilter.minAvg || x.countTwos > 0);
+
+    const rows = [['ФИО', 'Класс', 'Средний балл', 'Двоек', 'Проблемные предметы']];
+    const colored = [];
+    list.forEach((x, i) => {
+      rows.push([
+        _fullName(x.student),
+        x.classObj ? x.classObj.name : '',
+        x.overallAvg,
+        x.countTwos,
+        x.problemSubjects.join(', ')
+      ]);
+      const bg = x.countTwos > 0 ? 'FED7D7' : x.overallAvg < 3.0 ? 'FEFCBF' : 'FFFFFF';
+      colored.push({ r: i+1, c: 2, bg, bold: true });
+      if (x.countTwos > 0) colored.push({ r: i+1, c: 3, bg: 'FED7D7', bold: true });
+    });
+
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    ws['!cols'] = [{wch:30},{wch:10},{wch:14},{wch:10},{wch:40}];
+    colored.forEach(c => {
+      const addr = XLSX.utils.encode_cell({ r: c.r, c: c.c });
+      if (ws[addr]) ws[addr].s = { fill: { fgColor: { rgb: c.bg } }, font: { bold: c.bold } };
+    });
+    XLSX.utils.book_append_sheet(wb, ws, 'Неуспевающие');
+    XLSX.writeFile(wb, `Неуспевающие_${_today()}.xlsx`);
+    _toast('Excel сохранён', 'success');
+  };
+
+  /* ============================================================
+     ПОСТ-РЕНДЕР — графики
+     ============================================================ */
+  function afterReportsRender() {
+    const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+    const textColor = isDark ? '#cbd5e0' : '#475569';
+    const gridColor = isDark ? '#2d3748' : '#e2e8f0';
+
+    // График качества знаний
+    const ctx1 = document.getElementById('qualityChart');
+    if (ctx1 && window._qualityChartData) {
+      const data = window._qualityChartData;
+      if (window._qualityChartInstance) window._qualityChartInstance.destroy();
+      window._qualityChartInstance = new Chart(ctx1, {
+        type: 'bar',
+        data: {
+          labels: data.map(d => d.subject.length > 25 ? d.subject.slice(0,23)+'…' : d.subject),
+          datasets: [{
+            label: 'Качество знаний %',
+            data: data.map(d => d.quality),
+            backgroundColor: data.map(d =>
+              d.quality >= 70 ? '#38a169' : d.quality >= 50 ? '#dd6b20' : '#e53e3e'),
+            borderRadius: 8,
+          }]
+        },
+        options: {
+          indexAxis: 'y',
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              callbacks: {
+                label: (ctx) => `Качество: ${ctx.raw}% · средний балл: ${data[ctx.dataIndex].avg}`,
+              }
+            }
+          },
+          scales: {
+            x: { min: 0, max: 100, ticks: { color: textColor, font: { size: 11 } }, grid: { color: gridColor } },
+            y: { ticks: { color: textColor, font: { size: 11 } }, grid: { display: false } }
+          }
+        }
+      });
+    }
+
+    // График рейтинга классов
+    const ctx2 = document.getElementById('ratingChart');
+    if (ctx2 && window._ratingChartData) {
+      const data = window._ratingChartData;
+      if (window._ratingChartInstance) window._ratingChartInstance.destroy();
+      window._ratingChartInstance = new Chart(ctx2, {
+        type: 'bar',
+        data: {
+          labels: data.map(d => d.name),
+          datasets: [
+            {
+              label: 'Средний балл',
+              data: data.map(d => d.avg),
+              backgroundColor: data.map(d =>
+                d.avg >= 4.0 ? '#38a169' : d.avg >= 3.5 ? '#04558a' : d.avg >= 3.0 ? '#dd6b20' : '#e53e3e'),
+              borderRadius: 8,
+              yAxisID: 'y',
+            },
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { labels: { color: textColor, font: { size: 11 } } },
+          },
+          scales: {
+            y: { min: 0, max: 5, ticks: { stepSize: 0.5, color: textColor, font: { size: 11 } }, grid: { color: gridColor } },
+            x: { ticks: { color: textColor, font: { size: 11 } }, grid: { display: false } }
+          }
+        }
+      });
+    }
+  }
+
+  /* ============================================================
+     ИНИЦИАЛИЗАЦИЯ
+     ============================================================ */
+  function init() {
+    if (typeof DB === 'undefined' || typeof SESSION === 'undefined') {
+      console.warn('[Reports] DB или SESSION не найдены');
+      return;
+    }
+
+    // Переопределяем render() для #reports
+    const _origRender = window.render;
+    if (typeof _origRender === 'function' && !window.__reportsRenderPatched) {
+      window.render = function() {
+        try {
+          const hash = location.hash.replace('#', '') || 'dashboard';
+          const parts = hash.split('/');
+          if (parts[0] === 'reports') {
+            renderReportsPage(parts[1] || 'quality');
+            return;
+          }
+        } catch (e) {
+          console.error('[Reports render]', e);
+        }
+        return _origRender.apply(this, arguments);
+      };
+      window.__reportsRenderPatched = true;
+    }
+
+    // Переопределяем renderNav для добавления кнопки
+    const _origNav = window.renderNav;
+    if (typeof _origNav === 'function' && !window.__reportsNavPatched) {
+      window.renderNav = function(active) {
+        const html = _origNav.apply(this, arguments);
+        if (typeof html !== 'string') return html;
+        if (html.includes('reports/quality')) return html;
+        const btn = `<button class="${active==='reports'?'active':''}"
+          onclick="location.hash='reports/quality'"
+          title="Аналитические отчёты">
+          ${_icon('bar-chart', 16)} <span>Отчёты</span>
+        </button>`;
+        return html.replace('</nav>', btn + '</nav>');
+      };
+      window.__reportsNavPatched = true;
+    }
+
+    // Перехват hashchange в capture-фазе
+    window.addEventListener('hashchange', function() {
+      const hash = location.hash.replace('#', '');
+      if (hash.startsWith('reports')) {
+        setTimeout(function() {
+          const sub = hash.split('/')[1] || 'quality';
+          renderReportsPage(sub);
+        }, 10);
+      }
+    }, true);
+
+    if (typeof SESSION !== 'undefined' && SESSION) {
+      window.render();
+    }
+
+    console.log('[Reports] Модуль загружен');
+  }
+
+  if (document.readyState === 'complete') {
+    setTimeout(init, 300);
+  } else {
+    window.addEventListener('load', function() {
+      setTimeout(init, 300);
+    });
+  }
+
+})();
+</script>
 </body>
 </html>
