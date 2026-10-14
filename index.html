@@ -8311,5 +8311,91 @@ if (SESSION) render();
   console.log('[FIX dedupe] установлен');
 })();
 </script>
+<script>
+/* ============================================================
+   FIX v1.5 — приведение кнопки «Отчёты» к общему виду вкладок
+   Находит кнопку, вставляет в неё иконку Feather (как у
+   остальных вкладок) и удаляет дубликаты.
+   ============================================================ */
+(function() {
+  'use strict';
+
+  // Иконка Feather — «bar-chart» (та же, что у вкладки «Аналитика» и других)
+  const ICON_SVG = '<svg class="icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/></svg>';
+
+  function normalizeReportsButton() {
+    const nav = document.querySelector('nav.tabs');
+    if (!nav) return;
+
+    // Находим все кнопки со словом «Отчёт»
+    const all = Array.from(nav.querySelectorAll('button'));
+    const reportsBtns = all.filter(btn => {
+      const t = (btn.textContent || '').toLowerCase();
+      return t.includes('отчёт') || t.includes('отчет');
+    });
+
+    if (!reportsBtns.length) return;
+
+    // Оставляем одну
+    const keep = reportsBtns.find(b => b.hasAttribute('data-reports-btn')) || reportsBtns[0];
+    reportsBtns.forEach(b => { if (b !== keep) b.remove(); });
+
+    // Проверяем: если уже имеет правильную SVG-иконку — не трогаем
+    const hasSvgIcon = keep.querySelector('svg');
+    if (!hasSvgIcon) {
+      // Пересобираем содержимое: SVG + текст
+      keep.innerHTML = ICON_SVG + ' <span>Отчёты</span>';
+    }
+
+    // Помечаем и привязываем корректный обработчик (один раз)
+    keep.setAttribute('data-reports-btn', '1');
+    if (!keep.__bound_reports__) {
+      keep.onclick = function(e) {
+        e.preventDefault();
+        location.hash = 'reports/quality';
+        setTimeout(function() {
+          if (typeof window.renderReportsPage === 'function') {
+            window.renderReportsPage('quality');
+          }
+        }, 30);
+      };
+      keep.__bound_reports__ = true;
+    }
+
+    // Убеждаемся, что активное состояние правильно
+    const hash = location.hash.replace('#', '');
+    if (hash.startsWith('reports')) {
+      keep.classList.add('active');
+    } else {
+      keep.classList.remove('active');
+    }
+  }
+
+  // Запускаем сразу, и следим за DOM
+  setTimeout(normalizeReportsButton, 150);
+
+  const app = document.getElementById('app');
+  if (app) {
+    const observer = new MutationObserver(function() {
+      normalizeReportsButton();
+    });
+    observer.observe(app, { childList: true, subtree: true });
+  }
+
+  // Также после смены hash
+  window.addEventListener('hashchange', function() {
+    setTimeout(normalizeReportsButton, 50);
+  }, true);
+
+  // И несколько раз после загрузки на случай поздних перерисовок
+  window.addEventListener('load', function() {
+    setTimeout(normalizeReportsButton, 200);
+    setTimeout(normalizeReportsButton, 800);
+    setTimeout(normalizeReportsButton, 1500);
+  });
+
+  console.log('[FIX v1.5] нормализация кнопки «Отчёты» установлена');
+})();
+</script>
 </body>
 </html>
