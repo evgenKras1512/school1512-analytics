@@ -8210,5 +8210,106 @@ if (SESSION) render();
 
 })();
 </script>
+<script>
+/* ============================================================
+   FIX v1.4 — удаление дубликатов кнопки «Отчёты»
+   Оставляет только первую кнопку с текстом «Отчёты»
+   ============================================================ */
+(function() {
+  'use strict';
+
+  function dedupeReportsButtons() {
+    const nav = document.querySelector('nav.tabs');
+    if (!nav) return;
+
+    // Ищем все кнопки, содержащие слово «Отчёты» в тексте
+    const all = Array.from(nav.querySelectorAll('button'));
+    const reports = all.filter(btn => {
+      const t = (btn.textContent || '').toLowerCase();
+      return t.includes('отчёт') || t.includes('отчет');
+    });
+
+    if (reports.length <= 1) return;
+
+    // Оставляем первую (или ту, у которой есть data-reports-btn)
+    let keep = reports.find(b => b.hasAttribute('data-reports-btn'));
+    if (!keep) keep = reports[0];
+
+    // Убираем все остальные
+    reports.forEach(btn => {
+      if (btn !== keep) {
+        btn.remove();
+        console.log('[FIX dedupe] удалена дублирующая кнопка Отчёты');
+      }
+    });
+
+    // Убеждаемся, что у оставшейся есть маркер и обработчик
+    keep.setAttribute('data-reports-btn', '1');
+    if (!keep.__bound__) {
+      keep.onclick = function(e) {
+        e.preventDefault();
+        location.hash = 'reports/quality';
+        setTimeout(function() {
+          if (typeof window.renderReportsPage === 'function') {
+            window.renderReportsPage('quality');
+          }
+        }, 30);
+      };
+      keep.__bound__ = true;
+    }
+  }
+
+  // Также чистим дубли «Диагностики»
+  function dedupeDiagnosticsButtons() {
+    const nav = document.querySelector('nav.tabs');
+    if (!nav) return;
+    const all = Array.from(nav.querySelectorAll('button'));
+    const diag = all.filter(btn => {
+      const t = (btn.textContent || '').toLowerCase();
+      return t.includes('диагностик');
+    });
+    if (diag.length <= 1) return;
+    let keep = diag.find(b => b.hasAttribute('data-diag-btn'));
+    if (!keep) keep = diag[0];
+    diag.forEach(btn => {
+      if (btn !== keep) {
+        btn.remove();
+        console.log('[FIX dedupe] удалена дублирующая кнопка Диагностики');
+      }
+    });
+    keep.setAttribute('data-diag-btn', '1');
+  }
+
+  function dedupeAll() {
+    dedupeReportsButtons();
+    dedupeDiagnosticsButtons();
+  }
+
+  // Первый запуск
+  setTimeout(dedupeAll, 200);
+
+  // Следим за изменениями навигации
+  const app = document.getElementById('app');
+  if (app) {
+    const observer = new MutationObserver(function() {
+      dedupeAll();
+    });
+    observer.observe(app, { childList: true, subtree: true });
+  }
+
+  // Дополнительно после hashchange
+  window.addEventListener('hashchange', function() {
+    setTimeout(dedupeAll, 50);
+  }, true);
+
+  // И после load
+  window.addEventListener('load', function() {
+    setTimeout(dedupeAll, 400);
+    setTimeout(dedupeAll, 1000);
+  });
+
+  console.log('[FIX dedupe] установлен');
+})();
+</script>
 </body>
 </html>
