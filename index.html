@@ -4535,5 +4535,93 @@ console.log('[FIX v6] saNavToggle / saNavCloseAll определены');
   console.log('[FIX v7] установлен. Групп найдено:', getAllGroups().length);
 })();
 </script>
+<script>
+/* ============================================================
+   FIX v8 — гарантированная перезапись saNavToggle
+   Перезаписывает функцию несколько раз с интервалом
+   ============================================================ */
+(function() {
+  const ORDER = { analytics: 0, work: 1, admin: 2 };
+
+  function getGroups() { return Array.from(document.querySelectorAll('.sa-nav-group')); }
+  function getDD(g) {
+    if (!g) return null;
+    for (const c of g.children) if (c.tagName !== 'BUTTON') return c;
+    return null;
+  }
+
+  function installToggle() {
+    window.saNavToggle = function(key) {
+      const all = getGroups();
+      const idx = ORDER[key];
+      const g = all[idx];
+      if (!g) { console.warn('[v8] группа не найдена:', key, 'групп:', all.length); return; }
+      const dd = getDD(g);
+      if (!dd) { console.warn('[v8] dropdown не найден:', key); return; }
+
+      all.forEach((gr, i) => {
+        if (i !== idx) { const d = getDD(gr); if (d) d.style.display = 'none'; }
+      });
+
+      const open = dd.style.display === 'block';
+      dd.style.display = open ? 'none' : 'block';
+      if (!open) {
+        Object.assign(dd.style, {
+          position: 'absolute',
+          top: '100%',
+          left: '0',
+          zIndex: '9999',
+          background: '#fff',
+          border: '1px solid #d9e4ec',
+          borderRadius: '10px',
+          boxShadow: '0 8px 24px rgba(4,85,138,.18)',
+          padding: '6px',
+          minWidth: '230px',
+          display: 'block',
+        });
+      }
+      console.log('[v8] toggle', key, '→', dd.style.display);
+    };
+    window.saNavToggle.__v8 = true;
+  }
+
+  function installClose() {
+    window.saNavCloseAll = function() {
+      getGroups().forEach(g => { const d = getDD(g); if (d) d.style.display = 'none'; });
+    };
+    window.saNavCloseAll.__v8 = true;
+    window.saNavClose = window.saNavCloseAll;
+  }
+
+  // Устанавливаем сразу и перезаписываем 10 секунд каждые 300 мс
+  installToggle();
+  installClose();
+
+  let count = 0;
+  const iv = setInterval(() => {
+    if (window.saNavToggle && window.saNavToggle.__v8 !== true) {
+      installToggle();
+    }
+    if (window.saNavCloseAll && window.saNavCloseAll.__v8 !== true) {
+      installClose();
+    }
+    count++;
+    if (count >= 33) clearInterval(iv); // ~10 секунд
+  }, 300);
+
+  // Закрытие по клику мимо навигации
+  document.addEventListener('click', e => {
+    if (!e.target.closest('.sa-nav-group')) {
+      if (window.saNavCloseAll) window.saNavCloseAll();
+    }
+  }, true);
+
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && window.saNavCloseAll) window.saNavCloseAll();
+  }, true);
+
+  console.log('[v8] установлен. Функции перезаписываются 10 секунд.');
+})();
+</script>
 </body>
 </html>
