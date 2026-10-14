@@ -7952,5 +7952,279 @@ if (SESSION) render();
   console.log('[FIX reports] установлен');
 })();
 </script>
+<script>
+/* ============================================================
+   FIX v1.3 — построение графиков в «Отчётах» и «Диагностиках»
+   Проблема: inline <script> внутри innerHTML не выполняется.
+   Решение: строим графики напрямую из DOM, без промежуточных
+   переменных.
+   ============================================================ */
+(function() {
+  'use strict';
+
+  if (typeof Chart === 'undefined') {
+    console.warn('[FIX charts] Chart.js не загружен');
+    return;
+  }
+
+  function themeColors() {
+    const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+    return {
+      text: isDark ? '#cbd5e0' : '#475569',
+      grid: isDark ? '#2d3748' : '#e2e8f0',
+    };
+  }
+
+  /* ---------- 1. График «Рейтинг предметов по качеству знаний» ---------- */
+  window.fixDrawQualityChart = function() {
+    const canvas = document.getElementById('qualityChart');
+    if (!canvas) return;
+
+    // Собираем данные прямо из DOM — но их нет, считаем заново
+    if (typeof DB === 'undefined' || typeof SESSION === 'undefined') return;
+    if (!SESSION) return;
+
+    const subjects = (typeof usedSubjects === 'function') ? usedSubjects() : DB.getSubjects();
+    const students = (typeof allowedStudents === 'function') ? allowedStudents() : DB.getStudents();
+
+    const stats = subjects.map(sub => {
+      let sum = 0, cnt = 0, quality = 0;
+      students.forEach(s => {
+        const v = (typeof finalGrade === 'function') ? finalGrade(s.id, sub) : '';
+        if (/^[2-5]$/.test(v)) {
+          sum += +v; cnt++;
+          if (v === '5' || v === '4') quality++;
+        }
+      });
+      return {
+        subject: sub,
+        avg: cnt ? +(sum / cnt).toFixed(2) : 0,
+        quality: cnt ? Math.round(quality / cnt * 100) : 0,
+      };
+    }).sort((a, b) => a.quality - b.quality);
+
+    if (!stats.length) return;
+
+    const t = themeColors();
+    if (window._fixQualityChart) window._fixQualityChart.destroy();
+    window._fixQualityChart = new Chart(canvas, {
+      type: 'bar',
+      data: {
+        labels: stats.map(d => d.subject.length > 25 ? d.subject.slice(0, 23) + '…' : d.subject),
+        datasets: [{
+          label: 'Качество знаний %',
+          data: stats.map(d => d.quality),
+          backgroundColor: stats.map(d =>
+            d.quality >= 70 ? '#38a169' : d.quality >= 50 ? '#dd6b20' : '#e53e3e'),
+          borderRadius: 8,
+        }],
+      },
+      options: {
+        indexAxis: 'y',
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: (ctx) => `Качество: ${ctx.raw}% · средний балл: ${stats[ctx.dataIndex].avg}`,
+            },
+          },
+        },
+        scales: {
+          x: { min: 0, max: 100, ticks: { color: t.text, font: { size: 11 } }, grid: { color: t.grid } },
+          y: { ticks: { color: t.text, font: { size: 11 } }, grid: { display: false } },
+        },
+      },
+    });
+    console.log('[FIX charts] qualityChart нарисован:', stats.length, 'предметов');
+  };
+
+  /* ---------- 2. График «Средний балл по классам» (в «Отчётах») ---------- */
+  window.fixDrawRatingChart = function() {
+    const canvas = document.getElementById('ratingChart');
+    if (!canvas) return;
+    if (typeof DB === 'undefined' || typeof SESSION === 'undefined') return;
+    if (!SESSION) return;
+
+    const classes = (typeof allowedClasses === 'function') ? allowedClasses() : DB.getClasses();
+    const students = (typeof allowedStudents === 'function') ? allowedStudents() : DB.getStudents();
+    const subjects = DB.getSubjects();
+
+    const stats = classes.map(c => {
+      const sts = students.filter(s => s.classId === c.id);
+      let sum = 0, cnt = 0;
+      sts.forEach(s => subjects.forEach(sub => {
+        const v = (typeof finalGrade === 'function') ? finalGrade(s.id, sub) : '';
+        if (/^[2-5]$/.test(v)) { sum += +v; cnt++; }
+      }));
+      return {
+        name: c.name,
+        avg: cnt ? +(sum / cnt).toFixed(2) : 0,
+      };
+    }).filter(x => x.avg > 0).sort((a, b) => b.avg - a.avg);
+
+    if (!stats.length) {
+      console.warn('[FIX charts] нет данных для ratingChart');
+      return;
+    }
+
+    const t = themeColors();
+    if (window._fixRatingChart) window._fixRatingChart.destroy();
+    window._fixRatingChart = new Chart(canvas, {
+      type: 'bar',
+      data: {
+        labels: stats.map(d => d.name),
+        datasets: [{
+          label: 'Средний балл',
+          data: stats.map(d => d.avg),
+          backgroundColor: stats.map(d =>
+            d.avg >= 4.0 ? '#38a169' : d.avg >= 3.5 ? '#04558a' : d.avg >= 3.0 ? '#dd6b20' : '#e53e3e'),
+          borderRadius: 8,
+        }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+        },
+        scales: {
+          y: { min: 0, max: 5, ticks: { stepSize: 0.5, color: t.text, font: { size: 11 } }, grid: { color: t.grid } },
+          x: { ticks: { color: t.text, font: { size: 11 } }, grid: { display: false } },
+        },
+      },
+    });
+    console.log('[FIX charts] ratingChart нарисован:', stats.length, 'классов');
+  };
+
+  /* ---------- 3. График «Процент выполнения по темам» (в «Диагностиках») ---------- */
+  window.fixDrawDiagClassChart = function() {
+    const canvas = document.getElementById('diagClassChart');
+    if (!canvas) return;
+    if (typeof DB === 'undefined') return;
+
+    // Данные уже сложены модулем диагностик в window._diagClassChartData,
+    // но если не сложены — считаем сами из текущего состояния
+    let data = window._diagClassChartData;
+
+    if (!data || !data.length) {
+      // Пробуем восстановить из аналитики диагностик
+      // (модуль диагностик хранит analyticsState)
+      const st = window.analyticsState || (typeof analyticsState !== 'undefined' ? analyticsState : null);
+      if (!st || !st.templateId || !st.classId) {
+        // Если ничего нет — берём первое, что найдём
+        console.warn('[FIX charts] нет данных для diagClassChart');
+        return;
+      }
+
+      const templates = DB.load().diagnosticTemplates || [];
+      const template = templates.find(t => t.id === +st.templateId);
+      if (!template) return;
+
+      const students = DB.getStudents().filter(s => s.classId === +st.classId);
+      const sids = students.map(s => s.id);
+      const results = (DB.load().taskResults || [])
+        .filter(r => r.templateId === template.id && sids.includes(r.studentId));
+
+      if (!results.length) {
+        console.warn('[FIX charts] нет результатов для diagClassChart');
+        return;
+      }
+
+      const topics = {};
+      template.tasks.forEach(t => {
+        if (!topics[t.topic]) topics[t.topic] = [];
+        topics[t.topic].push(t);
+      });
+
+      data = Object.entries(topics).map(([topic, tasks]) => {
+        let done = 0, total = 0;
+        results.forEach(r => {
+          tasks.forEach(t => {
+            total++;
+            if (r.scores && r.scores[t.num] === 1) done++;
+          });
+        });
+        const percent = total ? Math.round(done / total * 100) : 0;
+        return { topic, percent };
+      }).sort((a, b) => a.percent - b.percent);
+    }
+
+    if (!data || !data.length) return;
+
+    const t = themeColors();
+    if (window._fixDiagClassChart) window._fixDiagClassChart.destroy();
+    window._fixDiagClassChart = new Chart(canvas, {
+      type: 'bar',
+      data: {
+        labels: data.map(d => d.topic.length > 25 ? d.topic.slice(0, 23) + '…' : d.topic),
+        datasets: [{
+          label: '% выполнения',
+          data: data.map(d => d.percent),
+          backgroundColor: data.map(d =>
+            d.percent >= 80 ? '#38a169' : d.percent >= 50 ? '#dd6b20' : '#e53e3e'),
+          borderRadius: 8,
+        }],
+      },
+      options: {
+        indexAxis: 'y',
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: (ctx) => `${data[ctx.dataIndex].topic}: ${ctx.raw}%`,
+            },
+          },
+        },
+        scales: {
+          x: { min: 0, max: 100, ticks: { color: t.text, font: { size: 11 } }, grid: { color: t.grid } },
+          y: { ticks: { color: t.text, font: { size: 11 } }, grid: { display: false } },
+        },
+      },
+    });
+    console.log('[FIX charts] diagClassChart нарисован:', data.length, 'тем');
+  };
+
+  /* ---------- Автозапуск после рендера страницы ---------- */
+
+  // Основной триггер — смена hash. Плюс задержка на выполнение рендера.
+  window.addEventListener('hashchange', function() {
+    setTimeout(function() {
+      const hash = location.hash.replace('#', '');
+      if (hash.startsWith('reports/quality')) window.fixDrawQualityChart();
+      else if (hash.startsWith('reports/rating')) window.fixDrawRatingChart();
+      else if (hash.startsWith('diagnostics/analytics')) window.fixDrawDiagClassChart();
+    }, 350);
+  });
+
+  // Также ловим клики по подвкладкам — они не всегда меняют hash
+  document.addEventListener('click', function(e) {
+    const el = e.target.closest('button, a');
+    if (!el) return;
+    setTimeout(function() {
+      const hash = location.hash.replace('#', '');
+      if (hash.startsWith('reports/quality')) window.fixDrawQualityChart();
+      else if (hash.startsWith('reports/rating')) window.fixDrawRatingChart();
+      else if (hash.startsWith('diagnostics/analytics')) window.fixDrawDiagClassChart();
+    }, 350);
+  }, true);
+
+  // При загрузке страницы — если сразу на нужном разделе
+  window.addEventListener('load', function() {
+    setTimeout(function() {
+      const hash = location.hash.replace('#', '');
+      if (hash.startsWith('reports/quality')) window.fixDrawQualityChart();
+      else if (hash.startsWith('reports/rating')) window.fixDrawRatingChart();
+      else if (hash.startsWith('diagnostics/analytics')) window.fixDrawDiagClassChart();
+    }, 500);
+  });
+
+  console.log('[FIX charts] установлен');
+
+})();
+</script>
 </body>
 </html>
