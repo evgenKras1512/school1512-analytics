@@ -7857,5 +7857,100 @@ if (SESSION) render();
 
 })();
 </script>
+<script>
+/* ============================================================
+   FIX «Отчёты» v1.2 — надёжная вставка кнопки в навигацию
+   Работает даже если renderNav переопределён много раз
+   ============================================================ */
+(function() {
+  'use strict';
+
+  function addReportsButton() {
+    const nav = document.querySelector('nav.tabs');
+    if (!nav) return;
+
+    // Уже есть?
+    if (nav.querySelector('[data-reports-btn]')) return;
+
+    const btn = document.createElement('button');
+    btn.setAttribute('data-reports-btn', '1');
+    btn.setAttribute('title', 'Аналитические отчёты');
+    btn.innerHTML = '📊 <span>Отчёты</span>';
+
+    // Если мы на странице отчётов — активный
+    const hash = location.hash.replace('#', '');
+    if (hash.startsWith('reports')) {
+      btn.classList.add('active');
+    }
+
+    btn.onclick = function(e) {
+      e.preventDefault();
+      location.hash = 'reports/quality';
+      // Форсируем рендер через 30 мс
+      setTimeout(function() {
+        if (typeof window.renderReportsPage === 'function') {
+          window.renderReportsPage('quality');
+        }
+      }, 30);
+    };
+
+    nav.appendChild(btn);
+    console.log('[FIX reports] кнопка добавлена');
+  }
+
+  function markActiveReportsBtn() {
+    const hash = location.hash.replace('#', '');
+    const nav = document.querySelector('nav.tabs');
+    if (!nav) return;
+    const btn = nav.querySelector('[data-reports-btn]');
+    if (!btn) return;
+    if (hash.startsWith('reports')) btn.classList.add('active');
+    else btn.classList.remove('active');
+  }
+
+  // Вставляем сразу
+  setTimeout(addReportsButton, 100);
+
+  // И следим за изменениями DOM
+  const app = document.getElementById('app');
+  if (app) {
+    const observer = new MutationObserver(function() {
+      if (!document.querySelector('nav.tabs [data-reports-btn]')) {
+        setTimeout(addReportsButton, 30);
+      }
+      markActiveReportsBtn();
+    });
+    observer.observe(app, { childList: true, subtree: true });
+  }
+
+  // Слушаем смену hash — если пользователь вручную ввёл #reports/*
+  window.addEventListener('hashchange', function() {
+    const hash = location.hash.replace('#', '');
+    markActiveReportsBtn();
+    if (hash.startsWith('reports')) {
+      setTimeout(function() {
+        if (typeof window.renderReportsPage === 'function') {
+          const sub = hash.split('/')[1] || 'quality';
+          window.renderReportsPage(sub);
+        }
+      }, 20);
+    }
+  }, true);
+
+  // Принудительный рендер при загрузке, если сразу открыт #reports/*
+  window.addEventListener('load', function() {
+    setTimeout(function() {
+      const hash = location.hash.replace('#', '');
+      if (hash.startsWith('reports') && typeof window.renderReportsPage === 'function') {
+        const sub = hash.split('/')[1] || 'quality';
+        window.renderReportsPage(sub);
+      }
+      addReportsButton();
+    }, 400);
+  });
+
+  console.log('[FIX reports] установлен');
+})();
+</script>
 </body>
 </html>
