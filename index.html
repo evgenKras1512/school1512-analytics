@@ -7813,22 +7813,6 @@ if (SESSION) render();
     }
 
     // Переопределяем renderNav для добавления кнопки
-    const _origNav = window.renderNav;
-    if (typeof _origNav === 'function' && !window.__reportsNavPatched) {
-      window.renderNav = function(active) {
-        const html = _origNav.apply(this, arguments);
-        if (typeof html !== 'string') return html;
-        if (html.includes('reports/quality')) return html;
-        const btn = `<button class="${active==='reports'?'active':''}"
-          onclick="location.hash='reports/quality'"
-          title="Аналитические отчёты">
-          ${_icon('bar-chart', 16)} <span>Отчёты</span>
-        </button>`;
-        return html.replace('</nav>', btn + '</nav>');
-      };
-      window.__reportsNavPatched = true;
-    }
-
     // Перехват hashchange в capture-фазе
     window.addEventListener('hashchange', function() {
       const hash = location.hash.replace('#', '');
