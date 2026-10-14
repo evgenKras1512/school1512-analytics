@@ -4950,5 +4950,1337 @@ function render() {
 if (SESSION) render();
 </script>
 </script>
+<script>
+/* ============================================================
+   МОДУЛЬ «ДИАГНОСТИКИ С АНАЛИТИКОЙ ПО ТЕМАМ» v1.0
+   Автономный модуль — не трогает существующий код
+   ============================================================ */
+(function() {
+  'use strict';
+
+  /* ---------- Хелперы с фолбэками ---------- */
+  function _esc(s) { return (typeof esc === 'function') ? esc(s) : String(s ?? ''); }
+  function _icon(name, size) {
+    if (typeof icon === 'function') return icon(name, size || 16);
+    return '';
+  }
+  function _toast(msg, type) {
+    if (typeof showToast === 'function') { showToast(msg, type); return; }
+    console.log(msg);
+  }
+  function _page(content, tab) {
+    if (typeof page === 'function') { page(content, tab); return; }
+    document.getElementById('app').innerHTML = content;
+  }
+  function _showModal(html) {
+    if (typeof showModal === 'function') { showModal(html); return; }
+    alert('showModal недоступен');
+  }
+  function _closeModal() {
+    if (typeof closeModal === 'function') { closeModal(); return; }
+    const m = document.getElementById('modalOverlay');
+    if (m) m.remove();
+  }
+  function _fmtDate(d) {
+    if (typeof fmtDate === 'function') return fmtDate(d);
+    return d || '—';
+  }
+  function _fullName(s) {
+    if (typeof fullName === 'function') return fullName(s);
+    return `${s.lastName} ${s.firstName}`;
+  }
+  function _todayStr() {
+    if (typeof todayStr === 'function') return todayStr();
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  }
+
+  /* ============================================================
+     ДЕФОЛТНЫЕ ШАБЛОНЫ — типовая база
+     ============================================================ */
+  function getDefaultTemplates() {
+    return [
+      {
+        id: 1,
+        name: 'ВПР Русский язык 5 класс',
+        type: 'ВПР',
+        subject: 'Русский язык',
+        classLevel: '5',
+        tasks: [
+          { num: 1, topic: 'Фонетика и орфоэпия', maxScore: 1 },
+          { num: 2, topic: 'Морфемика и словообразование', maxScore: 1 },
+          { num: 3, topic: 'Морфология', maxScore: 1 },
+          { num: 4, topic: 'Синтаксис и пунктуация', maxScore: 1 },
+          { num: 5, topic: 'Орфография', maxScore: 1 },
+          { num: 6, topic: 'Лексика и фразеология', maxScore: 1 },
+          { num: 7, topic: 'Работа с текстом', maxScore: 1 },
+          { num: 8, topic: 'Орфоэпические нормы', maxScore: 1 },
+          { num: 9, topic: 'Морфологический разбор', maxScore: 1 },
+          { num: 10, topic: 'Синтаксический разбор', maxScore: 1 },
+        ]
+      },
+      {
+        id: 2,
+        name: 'ВПР Математика 5 класс',
+        type: 'ВПР',
+        subject: 'Математика',
+        classLevel: '5',
+        tasks: [
+          { num: 1, topic: 'Натуральные числа и действия', maxScore: 1 },
+          { num: 2, topic: 'Обыкновенные дроби', maxScore: 1 },
+          { num: 3, topic: 'Обыкновенные дроби', maxScore: 1 },
+          { num: 4, topic: 'Десятичные дроби', maxScore: 1 },
+          { num: 5, topic: 'Проценты', maxScore: 1 },
+          { num: 6, topic: 'Текстовые задачи', maxScore: 1 },
+          { num: 7, topic: 'Текстовые задачи', maxScore: 1 },
+          { num: 8, topic: 'Геометрические фигуры', maxScore: 1 },
+          { num: 9, topic: 'Периметр и площадь', maxScore: 1 },
+          { num: 10, topic: 'Работа с диаграммами', maxScore: 1 },
+          { num: 11, topic: 'Логические задачи', maxScore: 1 },
+          { num: 12, topic: 'Уравнения', maxScore: 1 },
+        ]
+      },
+      {
+        id: 3,
+        name: 'МЦКО Читательская грамотность',
+        type: 'МЦКО',
+        subject: 'Метапредметная',
+        classLevel: '5-9',
+        tasks: [
+          { num: 1, topic: 'Поиск информации в тексте', maxScore: 1 },
+          { num: 2, topic: 'Поиск информации в тексте', maxScore: 1 },
+          { num: 3, topic: 'Интерпретация текста', maxScore: 1 },
+          { num: 4, topic: 'Интерпретация текста', maxScore: 1 },
+          { num: 5, topic: 'Осмысление и оценка', maxScore: 1 },
+          { num: 6, topic: 'Осмысление и оценка', maxScore: 1 },
+          { num: 7, topic: 'Работа с несколькими текстами', maxScore: 1 },
+          { num: 8, topic: 'Работа с несколькими текстами', maxScore: 1 },
+        ]
+      },
+      {
+        id: 4,
+        name: 'МЦКО Математическая грамотность',
+        type: 'МЦКО',
+        subject: 'Метапредметная',
+        classLevel: '5-9',
+        tasks: [
+          { num: 1, topic: 'Применение математики в жизни', maxScore: 1 },
+          { num: 2, topic: 'Применение математики в жизни', maxScore: 1 },
+          { num: 3, topic: 'Интерпретация данных', maxScore: 1 },
+          { num: 4, topic: 'Интерпретация данных', maxScore: 1 },
+          { num: 5, topic: 'Формулирование задачи', maxScore: 1 },
+          { num: 6, topic: 'Рассуждения и аргументация', maxScore: 1 },
+          { num: 7, topic: 'Рассуждения и аргументация', maxScore: 1 },
+          { num: 8, topic: 'Работа с графиками и таблицами', maxScore: 1 },
+        ]
+      },
+    ];
+  }
+
+  /* ============================================================
+     РАСШИРЕНИЕ БД
+     ============================================================ */
+  function migrateData() {
+    const d = DB.load();
+    let changed = false;
+    if (!d.diagnosticTemplates) {
+      d.diagnosticTemplates = getDefaultTemplates();
+      changed = true;
+    }
+    if (!d.taskResults) {
+      d.taskResults = [];
+      changed = true;
+    }
+    if (!d.nextIds.templateId) {
+      d.nextIds.templateId = d.diagnosticTemplates.length + 1;
+      changed = true;
+    }
+    if (!d.nextIds.taskResultId) {
+      d.nextIds.taskResultId = 1;
+      changed = true;
+    }
+    if (changed) DB.save();
+  }
+
+  /* ---------- Методы БД ---------- */
+  function getTemplates() { return DB.load().diagnosticTemplates || []; }
+  function getTaskResults() { return DB.load().taskResults || []; }
+
+  function addTemplate(t) {
+    const d = DB.load();
+    t.id = d.nextIds.templateId++;
+    d.diagnosticTemplates.push(t);
+    DB.save();
+    return t;
+  }
+  function updateTemplate(id, patch) {
+    const d = DB.load();
+    const t = d.diagnosticTemplates.find(x => x.id === id);
+    if (t) Object.assign(t, patch);
+    DB.save();
+  }
+  function deleteTemplate(id) {
+    const d = DB.load();
+    d.diagnosticTemplates = d.diagnosticTemplates.filter(t => t.id !== id);
+    d.taskResults = d.taskResults.filter(r => r.templateId !== id);
+    DB.save();
+  }
+
+  function saveTaskResult(studentId, templateId, scores) {
+    const d = DB.load();
+    const existing = d.taskResults.find(r => r.studentId === studentId && r.templateId === templateId);
+    const template = d.diagnosticTemplates.find(t => t.id === templateId);
+
+    if (existing) {
+      existing.scores = scores;
+      existing.date = _todayStr();
+    } else {
+      d.taskResults.push({
+        id: d.nextIds.taskResultId++,
+        studentId, templateId,
+        date: _todayStr(),
+        scores: { ...scores },
+      });
+    }
+
+    // Синхронизация с diagnostics — чтобы карточка ученика и графики подтянули
+    const total = template.tasks.length;
+    const done = template.tasks.filter(t => scores[t.num] === 1).length;
+    const percent = total ? Math.round(done / total * 100) : 0;
+    const level = percent >= 80 ? 'высокий' : percent >= 50 ? 'базовый' : 'низкий';
+
+    const dgExist = d.diagnostics.find(x => x.studentId === studentId
+      && x.templateId === templateId);
+    const dgData = {
+      studentId,
+      title: template.name,
+      type: template.type,
+      subject: template.subject,
+      date: _todayStr(),
+      result: `${done}/${total}`,
+      score: done,
+      maxScore: total,
+      level: level,
+      comment: `Автоматически из аналитики по темам (${percent}%)`,
+      templateId,
+    };
+    if (dgExist) {
+      Object.assign(dgExist, dgData);
+    } else {
+      dgData.id = d.nextIds.diagnostic++;
+      d.diagnostics.push(dgData);
+    }
+    DB.save();
+  }
+
+  function deleteTaskResult(id) {
+    const d = DB.load();
+    const r = d.taskResults.find(x => x.id === id);
+    if (r) {
+      d.diagnostics = d.diagnostics.filter(x => !(x.studentId === r.studentId && x.templateId === r.templateId));
+    }
+    d.taskResults = d.taskResults.filter(x => x.id !== id);
+    DB.save();
+  }
+
+  /* ============================================================
+     АНАЛИТИКА ПО ТЕМАМ
+     ============================================================ */
+  function computeTopicStats(template, results) {
+    if (!template || !results || !results.length) return [];
+    const topics = {};
+    template.tasks.forEach(t => {
+      if (!topics[t.topic]) topics[t.topic] = [];
+      topics[t.topic].push(t);
+    });
+    const out = [];
+    Object.entries(topics).forEach(([topic, tasks]) => {
+      let done = 0, total = 0;
+      results.forEach(r => {
+        tasks.forEach(t => {
+          total++;
+          if (r.scores && r.scores[t.num] === 1) done++;
+        });
+      });
+      const percent = total ? Math.round(done / total * 100) : 0;
+      const level = percent >= 80 ? 'высокий' : percent >= 50 ? 'базовый' : 'низкий';
+      out.push({ topic, done, total, percent, level, tasksCount: tasks.length });
+    });
+    out.sort((a, b) => a.percent - b.percent);
+    return out;
+  }
+
+  function levelBadge(level) {
+    if (level === 'высокий') return 'badge-green';
+    if (level === 'базовый') return 'badge-orange';
+    if (level === 'низкий') return 'badge-red';
+    return 'badge-gray';
+  }
+  function levelColor(level) {
+    if (level === 'высокий') return 'var(--success)';
+    if (level === 'базовый') return 'var(--warning)';
+    if (level === 'низкий') return 'var(--danger)';
+    return 'var(--text-muted)';
+  }
+
+  /* ============================================================
+     UI — СТРАНИЦА ДИАГНОСТИК
+     ============================================================ */
+  window.openDiagnostics = function(subtab) {
+    subtab = subtab || 'templates';
+    if (location.hash.startsWith('#diagnostics')) {
+      // Уже на странице — просто переключаем
+      renderDiagnosticsPage(subtab);
+      return;
+    }
+    location.hash = 'diagnostics/' + subtab;
+  };
+
+  window.diagGo = function(subtab) {
+    location.hash = 'diagnostics/' + subtab;
+  };
+
+  function renderDiagnosticsPage(subtab) {
+    if (!SESSION) { if (typeof renderLogin === 'function') renderLogin(); return; }
+    if (SESSION.role !== 'admin' && SESSION.role !== 'director') {
+      _toast('Нет доступа к разделу', 'error');
+      if (typeof renderDashboard === 'function') renderDashboard();
+      return;
+    }
+
+    let body = '';
+    if (subtab === 'templates') body = renderTemplatesTab();
+    else if (subtab === 'input') body = renderInputTab();
+    else if (subtab === 'analytics') body = renderAnalyticsTab();
+    else body = renderTemplatesTab();
+
+    const tabs = `
+      <div class="subtabs">
+        <button class="${subtab==='templates'?'active':''}" onclick="diagGo('templates')">
+          ${_icon('grid', 14)} Шаблоны
+        </button>
+        <button class="${subtab==='input'?'active':''}" onclick="diagGo('input')">
+          ${_icon('edit', 14)} Ввод результатов
+        </button>
+        <button class="${subtab==='analytics'?'active':''}" onclick="diagGo('analytics')">
+          ${_icon('chart', 14)} Аналитика по темам
+        </button>
+      </div>`;
+
+    const headerHtml = (typeof renderHeader === 'function') ? renderHeader() : '';
+    const navHtml = (typeof renderNav === 'function') ? renderNav('diagnostics') : '';
+
+    document.getElementById('app').innerHTML = headerHtml + navHtml +
+      `<main>
+        <h1 style="margin-bottom:16px;color:var(--primary);">${_icon('check', 28)} Диагностики с аналитикой по темам</h1>
+        ${tabs}
+        ${body}
+      </main>`;
+
+    if (typeof initSwipe === 'function') setTimeout(initSwipe, 50);
+    setTimeout(afterRenderCharts, 100);
+  }
+
+  window.renderDiagnosticsPage = renderDiagnosticsPage;
+
+  /* ============================================================
+     ВКЛАДКА «ШАБЛОНЫ»
+     ============================================================ */
+  function renderTemplatesTab() {
+    const templates = getTemplates();
+    const rows = templates.map(t => {
+      const topicSet = new Set(t.tasks.map(x => x.topic));
+      return `<tr>
+        <td><b>${_esc(t.name)}</b></td>
+        <td><span class="badge badge-blue">${_esc(t.type)}</span></td>
+        <td>${_esc(t.subject)}</td>
+        <td class="text-right">${_esc(t.classLevel || '—')}</td>
+        <td class="text-right">${t.tasks.length}</td>
+        <td class="text-right">${topicSet.size}</td>
+        <td class="text-right nowrap">
+          <button class="btn btn-outline btn-sm btn-icon" onclick="diagViewTemplate(${t.id})" title="Просмотр">${_icon('info', 12)}</button>
+          <button class="btn btn-outline btn-sm btn-icon" onclick="diagEditTemplate(${t.id})" title="Редактировать">${_icon('edit', 12)}</button>
+          <button class="btn btn-danger btn-sm btn-icon" onclick="diagDeleteTemplate(${t.id})" title="Удалить">${_icon('trash', 12)}</button>
+        </td>
+      </tr>`;
+    }).join('');
+
+    return `
+      <div class="card">
+        <div class="row-flex" style="justify-content:space-between;margin-bottom:16px;">
+          <h2 style="margin:0;">${_icon('grid', 18)} Шаблоны диагностических работ</h2>
+          <button class="btn btn-primary btn-sm" onclick="diagNewTemplate()">
+            ${_icon('plus', 14)} Создать шаблон
+          </button>
+        </div>
+        <div class="alert alert-info">
+          ${_icon('info', 14)} Шаблон — это структура работы: сколько заданий, к какой теме относится каждое.
+          В шаблоне указывается <b>только</b> структура; результаты вводятся отдельно для каждого ученика.
+        </div>
+        ${templates.length ? `<div class="table-wrap"><table>
+          <thead><tr>
+            <th>Название</th><th>Тип</th><th>Предмет</th>
+            <th class="text-right">Класс</th><th class="text-right">Заданий</th>
+            <th class="text-right">Тем</th><th></th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table></div>`
+        : `<div class="empty"><div class="empty-icon">📋</div><div>Нет шаблонов</div>
+          <button class="btn btn-primary btn-sm" onclick="diagNewTemplate()">
+            ${_icon('plus', 14)} Создать первый шаблон
+          </button></div>`}
+      </div>
+    `;
+  }
+
+  /* ---------- Просмотр шаблона ---------- */
+  window.diagViewTemplate = function(id) {
+    const t = getTemplates().find(x => x.id === id);
+    if (!t) return;
+    const rows = t.tasks.map(x => `
+      <tr>
+        <td class="text-right"><b>${x.num}</b></td>
+        <td>${_esc(x.topic)}</td>
+      </tr>
+    `).join('');
+    _showModal(`
+      <h2>${_icon('info', 20)} ${_esc(t.name)}</h2>
+      <table class="info-table" style="margin-bottom:16px;">
+        <tr><td>Тип:</td><td>${_esc(t.type)}</td></tr>
+        <tr><td>Предмет:</td><td>${_esc(t.subject)}</td></tr>
+        <tr><td>Класс:</td><td>${_esc(t.classLevel || '—')}</td></tr>
+        <tr><td>Заданий:</td><td>${t.tasks.length}</td></tr>
+      </table>
+      <h3>Задания</h3>
+      <div class="table-wrap">
+        <table><thead><tr><th class="text-right">№</th><th>Тема</th></tr></thead>
+        <tbody>${rows}</tbody></table>
+      </div>
+      <div class="form-actions">
+        <button class="btn btn-primary" onclick="diagEditTemplate(${id})">${_icon('edit', 14)} Редактировать</button>
+        <button class="btn btn-outline" onclick="closeModal()">Закрыть</button>
+      </div>
+    `);
+  };
+
+  /* ---------- Создание / редактирование ---------- */
+  window.diagNewTemplate = function() {
+    openTemplateForm(null);
+  };
+  window.diagEditTemplate = function(id) {
+    const t = getTemplates().find(x => x.id === id);
+    if (!t) return;
+    openTemplateForm(t);
+  };
+
+  function openTemplateForm(t) {
+    const isEdit = !!t;
+    const tasks = isEdit ? JSON.parse(JSON.stringify(t.tasks)) : [
+      { num: 1, topic: '', maxScore: 1 }
+    ];
+
+    function tasksRows() {
+      return tasks.map((x, i) => `
+        <tr data-idx="${i}">
+          <td class="text-right"><b>${x.num}</b></td>
+          <td><input class="diag-topic-input" data-idx="${i}" data-field="topic" value="${_esc(x.topic)}"
+                     placeholder="Например: Обыкновенные дроби"
+                     style="width:100%;padding:6px 10px;border:1px solid var(--border-strong);border-radius:6px;background:var(--bg-input);color:var(--text);font-family:inherit;"
+                     oninput="diagTaskUpdate(${i},'topic',this.value)"></td>
+          <td class="text-right">
+            <button class="btn btn-danger btn-sm btn-icon" onclick="diagTaskRemove(${i})" title="Удалить">${_icon('trash', 12)}</button>
+          </td>
+        </tr>
+      `).join('');
+    }
+
+    _showModal(`
+      <h2>${_icon('grid', 20)} ${isEdit ? 'Редактирование' : 'Новый'} шаблон</h2>
+      <div class="form-grid mb-16">
+        <div class="form-group"><label>Название *</label>
+          <input id="tpl_name" value="${_esc(isEdit ? t.name : '')}" placeholder="ВПР по математике 5 класс"></div>
+        <div class="form-group"><label>Тип *</label>
+          <select id="tpl_type">
+            ${['ВПР','МЦКО','ОГЭ','ЕГЭ','промежуточная','другое'].map(x =>
+              `<option ${isEdit && t.type===x?'selected':''}>${x}</option>`).join('')}
+          </select></div>
+        <div class="form-group"><label>Предмет</label>
+          <input id="tpl_subject" value="${_esc(isEdit ? t.subject : '')}" placeholder="Математика"></div>
+        <div class="form-group"><label>Класс</label>
+          <input id="tpl_level" value="${_esc(isEdit ? (t.classLevel || '') : '')}" placeholder="5"></div>
+      </div>
+
+      <div class="row-flex" style="justify-content:space-between;margin-bottom:8px;">
+        <h3 style="margin:0;">Задания и темы</h3>
+        <button class="btn btn-outline btn-sm" onclick="diagTaskAdd()">
+          ${_icon('plus', 12)} Добавить задание
+        </button>
+      </div>
+      <div class="table-wrap" style="max-height: 40vh; overflow-y: auto;">
+        <table><thead><tr>
+          <th class="text-right" style="width:60px;">№</th>
+          <th>Тема / проверяемое умение</th>
+          <th style="width:60px;"></th>
+        </tr></thead>
+        <tbody id="tpl_tasks_body">${tasksRows()}</tbody></table>
+      </div>
+
+      <div class="alert alert-info mt-16">
+        Задания можно группировать по темам — просто впишите одинаковую тему в несколько строк.
+        Затем аналитика покажет по каждой теме, сколько заданий справился ученик.
+      </div>
+
+      <div class="form-actions">
+        <button class="btn btn-primary" onclick="diagSaveTemplate(${isEdit ? t.id : 'null'})">
+          ${_icon('save', 14)} Сохранить
+        </button>
+        <button class="btn btn-outline" onclick="closeModal()">Отмена</button>
+      </div>
+    `);
+
+    window._diagTasksDraft = tasks;
+  }
+
+  window.diagTaskUpdate = function(i, field, value) {
+    const arr = window._diagTasksDraft;
+    if (!arr || !arr[i]) return;
+    arr[i][field] = value;
+  };
+  window.diagTaskAdd = function() {
+    const arr = window._diagTasksDraft;
+    if (!arr) return;
+    arr.push({ num: arr.length + 1, topic: '', maxScore: 1 });
+    diagRedrawTasks();
+  };
+  window.diagTaskRemove = function(i) {
+    const arr = window._diagTasksDraft;
+    if (!arr) return;
+    arr.splice(i, 1);
+    arr.forEach((x, idx) => x.num = idx + 1);
+    diagRedrawTasks();
+  };
+  function diagRedrawTasks() {
+    const body = document.getElementById('tpl_tasks_body');
+    if (!body) return;
+    const arr = window._diagTasksDraft || [];
+    body.innerHTML = arr.map((x, i) => `
+      <tr>
+        <td class="text-right"><b>${x.num}</b></td>
+        <td><input value="${_esc(x.topic)}" placeholder="Например: Обыкновенные дроби"
+                   style="width:100%;padding:6px 10px;border:1px solid var(--border-strong);border-radius:6px;background:var(--bg-input);color:var(--text);font-family:inherit;"
+                   oninput="diagTaskUpdate(${i},'topic',this.value)"></td>
+        <td class="text-right">
+          <button class="btn btn-danger btn-sm btn-icon" onclick="diagTaskRemove(${i})">${_icon('trash', 12)}</button>
+        </td>
+      </tr>
+    `).join('');
+  }
+
+  window.diagSaveTemplate = function(id) {
+    const name = (document.getElementById('tpl_name').value || '').trim();
+    const type = document.getElementById('tpl_type').value;
+    const subject = (document.getElementById('tpl_subject').value || '').trim();
+    const classLevel = (document.getElementById('tpl_level').value || '').trim();
+    const tasks = (window._diagTasksDraft || []).filter(t => (t.topic || '').trim());
+    if (!name) { _toast('Укажите название', 'error'); return; }
+    if (!tasks.length) { _toast('Добавьте хотя бы одно задание с темой', 'error'); return; }
+    tasks.forEach((t, i) => { t.num = i + 1; t.maxScore = 1; });
+    const data = { name, type, subject, classLevel, tasks };
+    if (id) { updateTemplate(id, data); _toast('Шаблон обновлён', 'success'); }
+    else { addTemplate(data); _toast('Шаблон создан', 'success'); }
+    delete window._diagTasksDraft;
+    _closeModal();
+    renderDiagnosticsPage('templates');
+  };
+
+  window.diagDeleteTemplate = function(id) {
+    const t = getTemplates().find(x => x.id === id);
+    if (!t) return;
+    if (!confirm(`Удалить шаблон «${t.name}»?\nВсе результаты по нему тоже удалятся.`)) return;
+    deleteTemplate(id);
+    _toast('Шаблон удалён', 'success');
+    renderDiagnosticsPage('templates');
+  };
+
+  /* ============================================================
+     ВКЛАДКА «ВВОД РЕЗУЛЬТАТОВ»
+     ============================================================ */
+  let inputState = {
+    templateId: '',
+    classId: '',
+    draft: {}, // { "studentId|taskNum": 1|0 }
+  };
+
+  function renderInputTab() {
+    const templates = getTemplates();
+    const classes = allowedClasses();
+    if (!inputState.templateId && templates.length) inputState.templateId = String(templates[0].id);
+    if (!inputState.classId && classes.length) inputState.classId = String(classes[0].id);
+
+    const template = templates.find(t => t.id === +inputState.templateId);
+    const students = DB.getStudents().filter(s => s.classId === +inputState.classId)
+      .sort((a, b) => a.lastName.localeCompare(b.lastName, 'ru'));
+
+    const existingResults = {};
+    if (template && students.length) {
+      const sids = students.map(s => s.id);
+      getTaskResults()
+        .filter(r => r.templateId === +inputState.templateId && sids.includes(r.studentId))
+        .forEach(r => { existingResults[r.studentId] = r; });
+    }
+
+    let matrix = '';
+    if (template && students.length) {
+      // Шапка: ФИО + номера заданий + Итого
+      const headerTasks = template.tasks.map(t =>
+        `<th class="nowrap" title="${_esc(t.topic)}" style="text-align:center;min-width:56px;padding:8px 4px;">
+          <div style="font-weight:700;color:var(--primary);font-size:13px;">№${t.num}</div>
+          <div class="muted" style="font-size:10px;max-width:80px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${_esc(t.topic)}</div>
+        </th>`
+      ).join('');
+      const bodyRows = students.map(s => {
+        const cells = template.tasks.map(t => {
+          const key = `${s.id}|${t.num}`;
+          let val = inputState.draft[key];
+          if (val === undefined) {
+            const ex = existingResults[s.id];
+            val = ex && ex.scores ? (ex.scores[t.num] === 1 ? 1 : 0) : null;
+          }
+          const cls = val === 1 ? 'diag-cell-ok' : val === 0 ? 'diag-cell-fail' : 'diag-cell-empty';
+          return `<td style="text-align:center;padding:2px;">
+            <div class="diag-toggle ${cls}" data-sid="${s.id}" data-num="${t.num}"
+                 onclick="diagToggle(${s.id},${t.num})"
+                 title="${_esc(t.topic)}"
+                 style="width:44px;height:34px;line-height:34px;border-radius:8px;cursor:pointer;user-select:none;font-weight:700;font-size:16px;margin:0 auto;transition:all .15s;">
+              ${val === 1 ? '✓' : val === 0 ? '✗' : '·'}
+            </div>
+          </td>`;
+        }).join('');
+        const sids = template.tasks.map(t => `${s.id}|${t.num}`);
+        let done = 0;
+        sids.forEach(k => {
+          let v = inputState.draft[k];
+          if (v === undefined) {
+            const ex = existingResults[s.id];
+            v = ex && ex.scores ? (ex.scores[Number(k.split('|')[1])] === 1 ? 1 : 0) : null;
+          }
+          if (v === 1) done++;
+        });
+        const total = template.tasks.length;
+        const pct = total ? Math.round(done / total * 100) : 0;
+        return `<tr>
+          <td class="name-cell" style="position:sticky;left:0;background:var(--bg-card);z-index:2;border-right:2px solid var(--border);min-width:180px;padding:8px 12px;font-weight:600;">
+            ${_esc(_fullName(s))}
+          </td>
+          ${cells}
+          <td class="text-right nowrap" style="padding:6px 12px;font-weight:700;color:var(--primary);">
+            ${done}/${total} <span class="muted">(${pct}%)</span>
+          </td>
+        </tr>`;
+      }).join('');
+
+      matrix = `
+        <div class="table-wrap" style="max-height:60vh;overflow:auto;border:1px solid var(--border);border-radius:10px;">
+          <table style="border-collapse:separate;border-spacing:0;font-size:13px;min-width:max-content;">
+            <thead>
+              <tr>
+                <th style="position:sticky;left:0;top:0;z-index:3;background:var(--primary);color:#fff;text-align:left;padding:10px 12px;border-bottom:1px solid var(--border);">ФИО</th>
+                ${headerTasks}
+                <th style="position:sticky;top:0;background:var(--primary);color:#fff;padding:10px 12px;border-bottom:1px solid var(--border);">Итого</th>
+              </tr>
+            </thead>
+            <tbody>${bodyRows}</tbody>
+          </table>
+        </div>
+      `;
+    } else if (!template) {
+      matrix = `<div class="empty"><div class="empty-icon">📋</div><div>Сначала создайте шаблон диагностики</div></div>`;
+    } else if (!students.length) {
+      matrix = `<div class="empty"><div class="empty-icon">👥</div><div>В выбранном классе нет учеников</div></div>`;
+    }
+
+    return `
+      <div class="card">
+        <div class="row-flex" style="justify-content:space-between;margin-bottom:16px;">
+          <h2 style="margin:0;">${_icon('edit', 18)} Ввод результатов по заданиям</h2>
+          <div class="btn-group">
+            <button class="btn btn-outline btn-sm" onclick="diagFillAll(1)">Все ✓</button>
+            <button class="btn btn-outline btn-sm" onclick="diagFillAll(0)">Все ✗</button>
+            <button class="btn btn-outline btn-sm" onclick="diagClearAll()">Очистить</button>
+          </div>
+        </div>
+        <div class="form-grid mb-16">
+          <div class="form-group"><label>Шаблон</label>
+            <select onchange="inputState.templateId=this.value;inputState.draft={};renderDiagnosticsPage('input');">
+              ${templates.map(t => `<option value="${t.id}" ${inputState.templateId==t.id?'selected':''}>${_esc(t.name)}</option>`).join('')}
+            </select></div>
+          <div class="form-group"><label>Класс</label>
+            <select onchange="inputState.classId=this.value;inputState.draft={};renderDiagnosticsPage('input');">
+              ${classes.map(c => `<option value="${c.id}" ${inputState.classId==c.id?'selected':''}>${_esc(c.name)}</option>`).join('')}
+            </select></div>
+        </div>
+        <div class="alert alert-info" style="font-size:13px;">
+          ${_icon('info', 14)} Кликните по ячейке, чтобы переключить: <b>·</b> → <b>✓</b> (справился) → <b>✗</b> (не справился) → <b>·</b>.
+        </div>
+        ${matrix}
+        ${(template && students.length) ? `
+          <div class="form-actions" style="margin-top:16px;">
+            <button class="btn btn-primary" onclick="diagSaveInput()">
+              ${_icon('save', 14)} Сохранить результаты
+            </button>
+          </div>
+        ` : ''}
+      </div>
+
+      <style>
+        .diag-cell-ok { background: #c6f6d5; color: #22543d; border: 2px solid #38a169; }
+        .diag-cell-ok:hover { transform: scale(1.05); }
+        .diag-cell-fail { background: #fed7d7; color: #742a2a; border: 2px solid #c53030; }
+        .diag-cell-fail:hover { transform: scale(1.05); }
+        .diag-cell-empty { background: var(--bg-hover); color: var(--text-muted); border: 2px dashed var(--border-strong); }
+        .diag-cell-empty:hover { border-color: var(--primary); }
+        html[data-theme="dark"] .diag-cell-ok { background: rgba(72,187,120,.25); color: #9ae6b4; }
+        html[data-theme="dark"] .diag-cell-fail { background: rgba(229,62,62,.25); color: #fc8181; }
+      </style>
+    `;
+  }
+
+  window.inputState = inputState;
+
+  window.diagToggle = function(sid, num) {
+    const key = `${sid}|${num}`;
+    const cur = inputState.draft[key];
+    if (cur === undefined) inputState.draft[key] = 1;
+    else if (cur === 1) inputState.draft[key] = 0;
+    else delete inputState.draft[key];
+    renderDiagnosticsPage('input');
+  };
+
+  window.diagFillAll = function(val) {
+    const template = getTemplates().find(t => t.id === +inputState.templateId);
+    if (!template) return;
+    const students = DB.getStudents().filter(s => s.classId === +inputState.classId);
+    students.forEach(s => template.tasks.forEach(t => {
+      inputState.draft[`${s.id}|${t.num}`] = val;
+    }));
+    renderDiagnosticsPage('input');
+  };
+  window.diagClearAll = function() {
+    inputState.draft = {};
+    renderDiagnosticsPage('input');
+  };
+
+  window.diagSaveInput = function() {
+    const template = getTemplates().find(t => t.id === +inputState.templateId);
+    if (!template) { _toast('Шаблон не найден', 'error'); return; }
+    const students = DB.getStudents().filter(s => s.classId === +inputState.classId);
+    if (!students.length) { _toast('Нет учеников', 'error'); return; }
+
+    // Собираем итоговые scores для каждого ученика
+    const results = {};
+    students.forEach(s => {
+      const scores = {};
+      let hasAny = false;
+      template.tasks.forEach(t => {
+        const key = `${s.id}|${t.num}`;
+        let v = inputState.draft[key];
+        if (v === undefined) {
+          // Берём из существующего
+          const ex = getTaskResults().find(r => r.studentId === s.id && r.templateId === template.id);
+          v = ex && ex.scores ? (ex.scores[t.num] === 1 ? 1 : 0) : null;
+        }
+        if (v === 1 || v === 0) { scores[t.num] = v; hasAny = true; }
+      });
+      if (hasAny) results[s.id] = scores;
+    });
+
+    const count = Object.keys(results).length;
+    if (!count) { _toast('Нет данных для сохранения', 'error'); return; }
+
+    Object.entries(results).forEach(([sid, scores]) => {
+      saveTaskResult(+sid, template.id, scores);
+    });
+    inputState.draft = {};
+    _toast(`Сохранено: ${count} учеников`, 'success');
+    renderDiagnosticsPage('input');
+  };
+
+  /* ============================================================
+     ВКЛАДКА «АНАЛИТИКА»
+     ============================================================ */
+  let analyticsState = {
+    mode: 'class', // 'class' | 'student'
+    templateId: '',
+    classId: '',
+    studentId: '',
+  };
+
+  function renderAnalyticsTab() {
+    const templates = getTemplates();
+    const classes = allowedClasses();
+    if (!analyticsState.templateId && templates.length) analyticsState.templateId = String(templates[0].id);
+    if (!analyticsState.classId && classes.length) analyticsState.classId = String(classes[0].id);
+
+    const controls = `
+      <div class="card">
+        <div class="subtabs" style="margin-bottom:16px;">
+          <button class="${analyticsState.mode==='class'?'active':''}"
+                  onclick="analyticsState.mode='class';renderDiagnosticsPage('analytics');">
+            ${_icon('users', 14)} По классу
+          </button>
+          <button class="${analyticsState.mode==='student'?'active':''}"
+                  onclick="analyticsState.mode='student';renderDiagnosticsPage('analytics');">
+            ${_icon('user', 14)} По ученику
+          </button>
+        </div>
+        <div class="form-grid">
+          <div class="form-group"><label>Шаблон</label>
+            <select onchange="analyticsState.templateId=this.value;renderDiagnosticsPage('analytics');">
+              ${templates.map(t => `<option value="${t.id}" ${analyticsState.templateId==t.id?'selected':''}>${_esc(t.name)}</option>`).join('')}
+            </select></div>
+          ${analyticsState.mode==='class' ? `
+            <div class="form-group"><label>Класс</label>
+              <select onchange="analyticsState.classId=this.value;renderDiagnosticsPage('analytics');">
+                ${classes.map(c => `<option value="${c.id}" ${analyticsState.classId==c.id?'selected':''}>${_esc(c.name)}</option>`).join('')}
+              </select></div>
+          ` : `
+            <div class="form-group"><label>Класс</label>
+              <select onchange="analyticsState.classId=this.value;analyticsState.studentId='';renderDiagnosticsPage('analytics');">
+                ${classes.map(c => `<option value="${c.id}" ${analyticsState.classId==c.id?'selected':''}>${_esc(c.name)}</option>`).join('')}
+              </select></div>
+            <div class="form-group"><label>Ученик</label>
+              <select onchange="analyticsState.studentId=this.value;renderDiagnosticsPage('analytics');">
+                <option value="">— выберите —</option>
+                ${DB.getStudents().filter(s => s.classId === +analyticsState.classId)
+                  .sort((a,b) => a.lastName.localeCompare(b.lastName, 'ru'))
+                  .map(s => `<option value="${s.id}" ${analyticsState.studentId==s.id?'selected':''}>${_esc(_fullName(s))}</option>`).join('')}
+              </select></div>
+          `}
+        </div>
+      </div>
+    `;
+
+    if (analyticsState.mode === 'class') {
+      return controls + renderClassAnalytics();
+    } else {
+      return controls + renderStudentAnalytics();
+    }
+  }
+
+  window.analyticsState = analyticsState;
+
+  function renderClassAnalytics() {
+    const template = getTemplates().find(t => t.id === +analyticsState.templateId);
+    const students = DB.getStudents().filter(s => s.classId === +analyticsState.classId);
+    if (!template) return `<div class="card"><div class="empty">Шаблон не выбран</div></div>`;
+    if (!students.length) return `<div class="card"><div class="empty">В классе нет учеников</div></div>`;
+
+    const sids = students.map(s => s.id);
+    const results = getTaskResults().filter(r => r.templateId === template.id && sids.includes(r.studentId));
+    if (!results.length) return `<div class="card"><div class="empty">
+      <div class="empty-icon">📊</div>
+      <div>Результатов по этой работе ещё нет</div>
+      <button class="btn btn-primary btn-sm" onclick="diagGo('input')">
+        ${_icon('edit', 14)} Перейти к вводу результатов
+      </button>
+    </div></div>`;
+
+    const stats = computeTopicStats(template, results);
+    const classObj = DB.getClasses().find(c => c.id === +analyticsState.classId);
+
+    // Общая сводка
+    let totalDone = 0, totalTasks = 0;
+    results.forEach(r => {
+      template.tasks.forEach(t => {
+        totalTasks++;
+        if (r.scores[t.num] === 1) totalDone++;
+      });
+    });
+    const overallPct = totalTasks ? Math.round(totalDone / totalTasks * 100) : 0;
+    const overallLevel = overallPct >= 80 ? 'высокий' : overallPct >= 50 ? 'базовый' : 'низкий';
+
+    const topicRows = stats.map(s => `
+      <tr>
+        <td><b>${_esc(s.topic)}</b></td>
+        <td class="text-right">${s.tasksCount}</td>
+        <td class="text-right">${s.done} / ${s.total}</td>
+        <td class="text-right">
+          <b style="color:${levelColor(s.level)};">${s.percent}%</b>
+        </td>
+        <td class="text-right">
+          <span class="badge ${levelBadge(s.level)}">${s.level}</span>
+        </td>
+      </tr>
+    `).join('');
+
+    // Топ проблемных тем (нижние 3)
+    const problems = stats.slice(0, 3).filter(s => s.percent < 80);
+
+    return `
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="num">${results.length}</div>
+          <div class="lbl">Учеников прошли</div>
+        </div>
+        <div class="stat-card">
+          <div class="num">${template.tasks.length}</div>
+          <div class="lbl">Заданий всего</div>
+        </div>
+        <div class="stat-card">
+          <div class="num">${stats.length}</div>
+          <div class="lbl">Тем</div>
+        </div>
+        <div class="stat-card" style="border-left-color:${levelColor(overallLevel)};">
+          <div class="num" style="color:${levelColor(overallLevel)};">${overallPct}%</div>
+          <div class="lbl">Выполнено · ${overallLevel}</div>
+        </div>
+      </div>
+
+      ${problems.length ? `<div class="card">
+        <h2>${_icon('alert', 18)} Западающие темы в классе</h2>
+        <div class="row-flex" style="gap:12px;flex-wrap:wrap;">
+          ${problems.map(p => `
+            <div class="card" style="flex:1;min-width:220px;margin:0;border-left:4px solid ${levelColor(p.level)};">
+              <div style="font-weight:700;color:var(--primary);margin-bottom:6px;">${_esc(p.topic)}</div>
+              <div style="font-size:28px;font-weight:700;color:${levelColor(p.level)};">${p.percent}%</div>
+              <div class="muted">${p.done} из ${p.total} заданий</div>
+            </div>
+          `).join('')}
+        </div>
+      </div>` : ''}
+
+      <div class="card">
+        <div class="row-flex" style="justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
+          <h2 style="margin:0;">${_icon('chart', 18)} Аналитика по темам · ${_esc(classObj ? classObj.name : '')}</h2>
+          <button class="btn btn-success btn-sm" onclick="diagExportClassXlsx()">
+            ${_icon('file-excel', 14)} Excel
+          </button>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr>
+              <th>Тема</th>
+              <th class="text-right">Заданий</th>
+              <th class="text-right">Справились</th>
+              <th class="text-right">Процент</th>
+              <th class="text-right">Уровень</th>
+            </tr></thead>
+            <tbody>${topicRows}</tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>${_icon('bar-chart', 18)} Процент выполнения по темам</h2>
+        <div class="chart-box-lg"><canvas id="diagClassChart"></canvas></div>
+      </div>
+
+      <script>window._diagClassChartData = ${JSON.stringify(stats.map(s => ({ topic: s.topic, percent: s.percent, level: s.level })))};<\/script>
+    `;
+  }
+
+  function renderStudentAnalytics() {
+    if (!analyticsState.studentId) {
+      return `<div class="card"><div class="empty">
+        <div class="empty-icon">👤</div>
+        <div>Выберите ученика</div>
+      </div></div>`;
+    }
+    const template = getTemplates().find(t => t.id === +analyticsState.templateId);
+    const student = DB.getStudent(+analyticsState.studentId);
+    if (!template || !student) return `<div class="card"><div class="empty">Нет данных</div></div>`;
+
+    const result = getTaskResults().find(r =>
+      r.templateId === template.id && r.studentId === student.id);
+    if (!result) {
+      return `<div class="card"><div class="empty">
+        <div class="empty-icon">📋</div>
+        <div>Этот ученик ещё не проходил работу «${_esc(template.name)}»</div>
+        <button class="btn btn-primary btn-sm" onclick="diagGo('input')">
+          ${_icon('edit', 14)} Перейти к вводу
+        </button>
+      </div></div>`;
+    }
+
+    const stats = computeTopicStats(template, [result]);
+
+    // Сводка
+    let totalDone = 0;
+    template.tasks.forEach(t => { if (result.scores[t.num] === 1) totalDone++; });
+    const totalTasks = template.tasks.length;
+    const overallPct = totalTasks ? Math.round(totalDone / totalTasks * 100) : 0;
+    const overallLevel = overallPct >= 80 ? 'высокий' : overallPct >= 50 ? 'базовый' : 'низкий';
+
+    // Для сравнения — данные по классу
+    const classMates = DB.getStudents().filter(s => s.classId === student.classId);
+    const classResults = getTaskResults().filter(r =>
+      r.templateId === template.id && classMates.some(s => s.id === r.studentId));
+    const classStats = computeTopicStats(template, classResults);
+    const classTopicMap = {};
+    classStats.forEach(s => { classTopicMap[s.topic] = s.percent; });
+
+    const topicRows = stats.map(s => {
+      const classPct = classTopicMap[s.topic] || 0;
+      const diff = s.percent - classPct;
+      const diffText = diff > 0 ? `+${diff}%` : diff < 0 ? `${diff}%` : '—';
+      const diffColor = diff > 0 ? 'var(--success)' : diff < 0 ? 'var(--danger)' : 'var(--text-muted)';
+      return `<tr>
+        <td><b>${_esc(s.topic)}</b></td>
+        <td class="text-right">${s.tasksCount}</td>
+        <td class="text-right">${s.done} / ${s.total}</td>
+        <td class="text-right"><b style="color:${levelColor(s.level)};">${s.percent}%</b></td>
+        <td class="text-right"><span class="badge ${levelBadge(s.level)}">${s.level}</span></td>
+        <td class="text-right"><b style="color:${diffColor};">${diffText}</b></td>
+      </tr>`;
+    }).join('');
+
+    const problems = stats.slice(0, 3).filter(s => s.percent < 80);
+
+    // Разбор заданий
+    const taskRows = template.tasks.map(t => {
+      const ok = result.scores[t.num] === 1;
+      return `<tr>
+        <td class="text-right"><b>${t.num}</b></td>
+        <td>${_esc(t.topic)}</td>
+        <td class="text-right">
+          <span class="badge ${ok ? 'badge-green' : 'badge-red'}">
+            ${ok ? '✓ справился' : '✗ не справился'}
+          </span>
+        </td>
+      </tr>`;
+    }).join('');
+
+    return `
+      <div class="card">
+        <div class="row-flex" style="justify-content:space-between;align-items:flex-start;gap:12px;">
+          <div>
+            <h2 style="margin-bottom:6px;">${_esc(_fullName(student))}</h2>
+            <div class="muted">Работа: <b>${_esc(template.name)}</b> · ${_esc(_fmtDate(result.date))}</div>
+          </div>
+          <span class="badge ${levelBadge(overallLevel)}" style="font-size:14px;padding:6px 14px;">
+            ${overallLevel} · ${overallPct}%
+          </span>
+        </div>
+      </div>
+
+      <div class="stats-grid">
+        <div class="stat-card"><div class="num">${totalDone}</div><div class="lbl">Справился</div></div>
+        <div class="stat-card"><div class="num">${totalTasks - totalDone}</div><div class="lbl">Не справился</div></div>
+        <div class="stat-card"><div class="num">${stats.length}</div><div class="lbl">Тем</div></div>
+        <div class="stat-card" style="border-left-color:${levelColor(overallLevel)};">
+          <div class="num" style="color:${levelColor(overallLevel)};">${overallPct}%</div>
+          <div class="lbl">Общий результат</div>
+        </div>
+      </div>
+
+      ${problems.length ? `<div class="card">
+        <h2>${_icon('alert', 18)} Западающие темы</h2>
+        <div class="row-flex" style="gap:12px;flex-wrap:wrap;">
+          ${problems.map(p => `
+            <div class="card" style="flex:1;min-width:220px;margin:0;border-left:4px solid ${levelColor(p.level)};">
+              <div style="font-weight:700;color:var(--primary);margin-bottom:6px;">${_esc(p.topic)}</div>
+              <div style="font-size:28px;font-weight:700;color:${levelColor(p.level)};">${p.percent}%</div>
+              <div class="muted">${p.done} из ${p.total} заданий</div>
+            </div>
+          `).join('')}
+        </div>
+      </div>` : ''}
+
+      <div class="card">
+        <h2>${_icon('chart', 18)} Сравнение с классом</h2>
+        <div class="table-wrap"><table>
+          <thead><tr>
+            <th>Тема</th><th class="text-right">Заданий</th>
+            <th class="text-right">Справился</th>
+            <th class="text-right">% ученика</th>
+            <th class="text-right">Уровень</th>
+            <th class="text-right">% класса</th>
+          </tr></thead>
+          <tbody>${topicRows}</tbody>
+        </table></div>
+      </div>
+
+      <div class="card">
+        <h2>${_icon('bar-chart', 18)} Профиль выполнения по темам</h2>
+        <div class="chart-box-lg"><canvas id="diagStudentChart"></canvas></div>
+      </div>
+
+      <div class="card">
+        <h2>${_icon('list', 18)} Разбор по заданиям</h2>
+        <div class="table-wrap"><table>
+          <thead><tr><th class="text-right">№</th><th>Тема</th><th class="text-right">Результат</th></tr></thead>
+          <tbody>${taskRows}</tbody>
+        </table></div>
+      </div>
+
+      <script>
+        window._diagStudentChartData = ${JSON.stringify(stats.map(s => ({
+          topic: s.topic, percent: s.percent, level: s.level,
+          classPercent: classTopicMap[s.topic] || 0
+        })))};
+      <\/script>
+    `;
+  }
+
+  /* ============================================================
+     ПОСТ-РЕНДЕР: графики
+     ============================================================ */
+  function afterRenderCharts() {
+    // График класса
+    const ctx1 = document.getElementById('diagClassChart');
+    if (ctx1 && window._diagClassChartData) {
+      const data = window._diagClassChartData;
+      const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+      const textColor = isDark ? '#cbd5e0' : '#475569';
+      const gridColor = isDark ? '#2d3748' : '#e2e8f0';
+
+      if (window._diagClassChart) window._diagClassChart.destroy();
+      window._diagClassChart = new Chart(ctx1, {
+        type: 'bar',
+        data: {
+          labels: data.map(d => d.topic.length > 25 ? d.topic.slice(0,23)+'…' : d.topic),
+          datasets: [{
+            label: '% выполнения',
+            data: data.map(d => d.percent),
+            backgroundColor: data.map(d =>
+              d.percent >= 80 ? '#38a169' : d.percent >= 50 ? '#dd6b20' : '#e53e3e'),
+            borderRadius: 8,
+          }]
+        },
+        options: {
+          indexAxis: 'y',
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              callbacks: {
+                label: (ctx) => `${data[ctx.dataIndex].topic}: ${ctx.raw}%`,
+              }
+            }
+          },
+          scales: {
+            x: { min: 0, max: 100, ticks: { font: { size: 11 }, color: textColor }, grid: { color: gridColor } },
+            y: { ticks: { font: { size: 11 }, color: textColor }, grid: { display: false } }
+          }
+        }
+      });
+    }
+
+    // График ученика
+    const ctx2 = document.getElementById('diagStudentChart');
+    if (ctx2 && window._diagStudentChartData) {
+      const data = window._diagStudentChartData;
+      const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+      const textColor = isDark ? '#cbd5e0' : '#475569';
+      const gridColor = isDark ? '#2d3748' : '#e2e8f0';
+
+      if (window._diagStudentChart) window._diagStudentChart.destroy();
+      window._diagStudentChart = new Chart(ctx2, {
+        type: 'bar',
+        data: {
+          labels: data.map(d => d.topic.length > 25 ? d.topic.slice(0,23)+'…' : d.topic),
+          datasets: [
+            {
+              label: '% ученика',
+              data: data.map(d => d.percent),
+              backgroundColor: data.map(d =>
+                d.percent >= 80 ? '#38a169' : d.percent >= 50 ? '#dd6b20' : '#e53e3e'),
+              borderRadius: 8,
+            },
+            {
+              label: '% класса',
+              data: data.map(d => d.classPercent),
+              backgroundColor: 'rgba(44,82,130,.25)',
+              borderRadius: 8,
+            }
+          ]
+        },
+        options: {
+          indexAxis: 'y',
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { labels: { font: { size: 11 }, color: textColor } },
+            tooltip: {
+              callbacks: {
+                label: (ctx) => `${ctx.dataset.label}: ${ctx.raw}%`,
+              }
+            }
+          },
+          scales: {
+            x: { min: 0, max: 100, ticks: { font: { size: 11 }, color: textColor }, grid: { color: gridColor } },
+            y: { ticks: { font: { size: 11 }, color: textColor }, grid: { display: false } }
+          }
+        }
+      });
+    }
+  }
+
+  /* ============================================================
+     ЭКСПОРТ В EXCEL
+     ============================================================ */
+  window.diagExportClassXlsx = function() {
+    if (typeof XLSX === 'undefined') { _toast('Библиотека XLSX не загружена', 'error'); return; }
+    const template = getTemplates().find(t => t.id === +analyticsState.templateId);
+    const classObj = DB.getClasses().find(c => c.id === +analyticsState.classId);
+    if (!template || !classObj) { _toast('Выберите шаблон и класс', 'error'); return; }
+    const students = DB.getStudents().filter(s => s.classId === classObj.id);
+    const sids = students.map(s => s.id);
+    const results = getTaskResults().filter(r => r.templateId === template.id && sids.includes(r.studentId));
+    if (!results.length) { _toast('Нет данных', 'error'); return; }
+
+    const stats = computeTopicStats(template, results);
+
+    // Лист 1 — сводка по темам
+    const rows1 = [['Тема', 'Заданий', 'Справились', 'Всего', 'Процент', 'Уровень']];
+    const colored1 = [];
+    stats.forEach((s, i) => {
+      rows1.push([s.topic, s.tasksCount, s.done, s.total, s.percent, s.level]);
+      const bg = s.percent >= 80 ? 'C6F6D5' : s.percent >= 50 ? 'FEFCBF' : 'FED7D7';
+      colored1.push({ r: i + 1, c: 4, bg, bold: true });
+    });
+
+    // Лист 2 — по ученикам
+    const header2 = ['ФИО', ...template.tasks.map(t => `№${t.num}`), 'Итого', '%'];
+    const rows2 = [header2];
+    const colored2 = [];
+    students.forEach((s, ri) => {
+      const r = results.find(x => x.studentId === s.id);
+      const row = [_fullName(s)];
+      let done = 0;
+      template.tasks.forEach((t, ci) => {
+        const ok = r && r.scores && r.scores[t.num] === 1;
+        row.push(ok ? '✓' : '✗');
+        if (ok) done++;
+        colored2.push({
+          r: ri + 1, c: ci + 1,
+          bg: ok ? 'C6F6D5' : 'FED7D7', bold: false
+        });
+      });
+      const total = template.tasks.length;
+      const pct = total ? Math.round(done / total * 100) : 0;
+      row.push(`${done}/${total}`, `${pct}%`);
+      rows2.push(row);
+      colored2.push({
+        r: ri + 1, c: template.tasks.length + 2,
+        bg: pct >= 80 ? 'C6F6D5' : pct >= 50 ? 'FEFCBF' : 'FED7D7', bold: true
+      });
+    });
+
+    // Лист 3 — по темам × ученикам
+    const topicsSet = [...new Set(template.tasks.map(t => t.topic))];
+    const header3 = ['ФИО', ...topicsSet];
+    const rows3 = [header3];
+    const colored3 = [];
+    students.forEach((s, ri) => {
+      const r = results.find(x => x.studentId === s.id);
+      const row = [_fullName(s)];
+      topicsSet.forEach((topic, ci) => {
+        const topicTasks = template.tasks.filter(t => t.topic === topic);
+        let done = 0;
+        topicTasks.forEach(t => {
+          if (r && r.scores && r.scores[t.num] === 1) done++;
+        });
+        const pct = topicTasks.length ? Math.round(done / topicTasks.length * 100) : 0;
+        row.push(`${pct}%`);
+        const bg = pct >= 80 ? 'C6F6D5' : pct >= 50 ? 'FEFCBF' : 'FED7D7';
+        colored3.push({ r: ri + 1, c: ci + 1, bg, bold: false });
+      });
+      rows3.push(row);
+    });
+
+    const wb = XLSX.utils.book_new();
+    const ws1 = XLSX.utils.aoa_to_sheet(rows1);
+    ws1['!cols'] = [{ wch: 35 }, { wch: 10 }, { wch: 14 }, { wch: 10 }, { wch: 10 }, { wch: 12 }];
+    colored1.forEach(c => {
+      const addr = XLSX.utils.encode_cell({ r: c.r, c: c.c });
+      if (ws1[addr]) ws1[addr].s = { fill: { fgColor: { rgb: c.bg } }, font: { bold: c.bold } };
+    });
+    XLSX.utils.book_append_sheet(wb, ws1, 'Темы');
+
+    const ws2 = XLSX.utils.aoa_to_sheet(rows2);
+    ws2['!cols'] = [{ wch: 30 }, ...template.tasks.map(() => ({ wch: 6 })), { wch: 10 }, { wch: 8 }];
+    colored2.forEach(c => {
+      const addr = XLSX.utils.encode_cell({ r: c.r, c: c.c });
+      if (ws2[addr]) ws2[addr].s = { fill: { fgColor: { rgb: c.bg } }, font: { bold: c.bold } };
+    });
+    XLSX.utils.book_append_sheet(wb, ws2, 'По заданиям');
+
+    const ws3 = XLSX.utils.aoa_to_sheet(rows3);
+    ws3['!cols'] = [{ wch: 30 }, ...topicsSet.map(() => ({ wch: 18 }))];
+    colored3.forEach(c => {
+      const addr = XLSX.utils.encode_cell({ r: c.r, c: c.c });
+      if (ws3[addr]) ws3[addr].s = { fill: { fgColor: { rgb: c.bg } }, font: { bold: c.bold } };
+    });
+    XLSX.utils.book_append_sheet(wb, ws3, 'По темам');
+
+    XLSX.writeFile(wb, `Диагностика_${classObj.name}_${template.name.replace(/\s+/g,'_')}.xlsx`);
+    _toast('Excel сохранён', 'success');
+  };
+
+  /* ============================================================
+     ИНИЦИАЛИЗАЦИЯ
+     ============================================================ */
+  function init() {
+    if (typeof DB === 'undefined' || typeof SESSION === 'undefined') {
+      console.warn('[Diagnostics] DB или SESSION не найдены');
+      return;
+    }
+    migrateData();
+
+    // Переопределяем render() для маршрута #diagnostics
+    const _origRender = window.render;
+    if (typeof _origRender === 'function') {
+      window.render = function() {
+        try {
+          const hash = location.hash.replace('#', '') || 'dashboard';
+          const parts = hash.split('/');
+          const route = parts[0];
+          const sub = parts[1];
+
+          if (route === 'diagnostics') {
+            renderDiagnosticsPage(sub || 'templates');
+            return;
+          }
+        } catch (e) {
+          console.error('[Diagnostics render]', e);
+        }
+        return _origRender.apply(this, arguments);
+      };
+    }
+
+    // Переопределяем renderNav для добавления кнопки
+    const _origNav = window.renderNav;
+    if (typeof _origNav === 'function') {
+      window.renderNav = function(active) {
+        const html = _origNav.apply(this, arguments);
+        if (typeof html !== 'string') return html;
+        const btn = `<button class="${active==='diagnostics'?'active':''}"
+          onclick="go('diagnostics/templates')" title="Диагностики с аналитикой по темам">
+          ${_icon('check', 16)} <span>Диагностики</span>
+        </button>`;
+        return html.replace('</nav>', btn + '</nav>');
+      };
+    }
+
+    // Перерисовываем, чтобы кнопка появилась
+    if (typeof SESSION !== 'undefined' && SESSION) {
+      window.render();
+    }
+
+    console.log('[Diagnostics] Модуль загружен');
+  }
+
+  if (document.readyState === 'complete') {
+    setTimeout(init, 200);
+  } else {
+    window.addEventListener('load', function() {
+      setTimeout(init, 200);
+    });
+  }
+
+})();
+</script>
 </body>
 </html>
