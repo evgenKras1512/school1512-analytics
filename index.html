@@ -4185,5 +4185,198 @@ window.addEventListener('load', () => {
   if ('serviceWorker' in navigator) navigator.serviceWorker.ready.then(reg => reg.update());
 });
 </script>
+<script>
+/* ============================================================
+   FIX v4.0 — надёжное открытие dropdown в навигации
+   Работает через event delegation + подстраховка через клик
+   по координатам, если кнопка чем-то перекрыта
+   ============================================================ */
+(function() {
+  'use strict';
+
+  console.log('[FIX v4.0] загружен');
+
+  // ------- 1. Открытие/закрытие dropdown -------
+  window.saNavOpen = function(key) {
+    document.querySelectorAll('.sa-nav-dropdown').forEach(d => {
+      if (d.getAttribute('data-sa-dropdown') === key) {
+        d.style.display = 'block';
+        d.style.position = 'absolute';
+        d.style.top = '100%';
+        d.style.left = '0';
+        d.style.zIndex = '9999';
+        d.style.background = 'var(--bg-card, #fff)';
+        d.style.border = '1px solid var(--border, #d9e4ec)';
+        d.style.borderRadius = '10px';
+        d.style.boxShadow = '0 8px 24px rgba(4,85,138,.18)';
+        d.style.padding = '6px';
+        d.style.minWidth = '230px';
+      } else {
+        d.style.display = 'none';
+      }
+    });
+  };
+
+  window.saNavClose = function() {
+    document.querySelectorAll('.sa-nav-dropdown').forEach(d => {
+      d.style.display = 'none';
+    });
+  };
+
+  window.saNavSwitch = function(key) {
+    const target = document.querySelector(`[data-sa-dropdown="${key}"]`);
+    if (!target) return;
+    const isOpen = target.style.display === 'block';
+    window.saNavClose();
+    if (!isOpen) window.saNavOpen(key);
+  };
+
+  // ------- 2. Event delegation: клик по любой кнопке группы -------
+  document.addEventListener('click', function(e) {
+    // 1. Клик по пункту dropdown
+    const item = e.target.closest('.sa-nav-dropdown button');
+    if (item) {
+      const hash = item.getAttribute('data-hash');
+      if (hash) {
+        e.preventDefault();
+        e.stopPropagation();
+        window.saNavClose();
+        location.hash = hash;
+        setTimeout(() => {
+          if (window.render) window.render();
+        }, 30);
+        return;
+      }
+    }
+
+    // 2. Клик по toggle-кнопке группы
+    const toggle = e.target.closest('[data-sa-group-toggle]');
+    if (toggle) {
+      e.preventDefault();
+      e.stopPropagation();
+      const key = toggle.getAttribute('data-sa-group-toggle');
+      window.saNavSwitch(key);
+      return;
+    }
+
+    // 3. Клик по одиночной вкладке
+    const single = e.target.closest('.sa-nav-single');
+    if (single) {
+      e.preventDefault();
+      e.stopPropagation();
+      window.saNavClose();
+      const hash = single.getAttribute('data-hash');
+      if (hash) {
+        location.hash = hash;
+        setTimeout(() => { if (window.render) window.render(); }, 30);
+      }
+      return;
+    }
+
+    // 4. Клик мимо навигации — закрыть все dropdown
+    if (!e.target.closest('.sa-nav-group')) {
+      window.saNavClose();
+    }
+  }, true); // true — перехватываем раньше всех
+
+  // ------- 3. Подстраховка: если кнопка перекрыта чем-то -------
+  // Навешиваем обработчик на mouseover — открываем dropdown
+  document.addEventListener('mouseover', function(e) {
+    const toggle = e.target.closest('[data-sa-group-toggle]');
+    if (toggle) {
+      const key = toggle.getAttribute('data-sa-group-toggle');
+      setTimeout(() => {
+        const grp = document.querySelector(`[data-sa-group="${key}"]`);
+        if (grp && grp.matches(':hover')) {
+          window.saNavOpen(key);
+        }
+      }, 50);
+    }
+  }, true);
+
+  document.addEventListener('mouseout', function(e) {
+    const grp = e.target.closest('.sa-nav-group');
+    if (grp) {
+      const key = grp.getAttribute('data-sa-group');
+      setTimeout(() => {
+        const g = document.querySelector(`[data-sa-group="${key}"]`);
+        if (g && !g.matches(':hover')) {
+          const d = document.querySelector(`[data-sa-dropdown="${key}"]`);
+          if (d) d.style.display = 'none';
+        }
+      }, 200);
+    }
+  }, true);
+
+  // ------- 4. Закрытие по Escape -------
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') window.saNavClose();
+  }, true);
+
+  // ------- 5. После рендера проставляем data-hash на кнопки -------
+  function patchNavButtons() {
+    const nav = document.querySelector('nav.tabs');
+    if (!nav) return;
+
+    // Проверяем, что навигация наша
+    const isGroupedNav = nav.id === 'sa-grouped-nav' || nav.querySelector('.sa-nav-group');
+    if (!isGroupedNav) {
+      console.log('[FIX v4.0] навигация не найдена — патчим при следующем рендере');
+      return;
+    }
+
+    // Патчим одиночные кнопки
+    nav.querySelectorAll('.sa-nav-single').forEach(btn => {
+      if (!btn.getAttribute('data-hash')) {
+        const onclick = btn.getAttribute('onclick') || '';
+        const m = onclick.match(/location\.hash='([^']+)'/);
+        if (m) btn.setAttribute('data-hash', m[1]);
+      }
+    });
+
+    // Патчим пункты dropdown
+    nav.querySelectorAll('.sa-nav-dropdown button').forEach(btn => {
+      if (!btn.getAttribute('data-hash')) {
+        const onclick = btn.getAttribute('onclick') || '';
+        const m = onclick.match(/location\.hash='([^']+)'/);
+        if (m) btn.setAttribute('data-hash', m[1]);
+      }
+    });
+
+    // Принудительно ставим высокий z-index на все группы
+    nav.querySelectorAll('.sa-nav-group').forEach(g => {
+      g.style.position = 'relative';
+      g.style.zIndex = '999';
+    });
+    nav.querySelectorAll('.sa-nav-dropdown').forEach(d => {
+      d.style.position = 'absolute';
+      d.style.zIndex = '9999';
+    });
+  }
+
+  setTimeout(patchNavButtons, 300);
+  setTimeout(patchNavButtons, 800);
+
+  // MutationObserver следит, чтобы после каждого рендера всё перепатчить
+  const app = document.getElementById('app');
+  if (app) {
+    const observer = new MutationObserver(() => {
+      setTimeout(patchNavButtons, 50);
+    });
+    observer.observe(app, { childList: true, subtree: false });
+  }
+
+  // ------- 6. Финальная проверка -------
+  setTimeout(() => {
+    const btns = document.querySelectorAll('[data-sa-group-toggle]');
+    console.log('[FIX v4.0] найдено кнопок групп:', btns.length);
+    btns.forEach(b => {
+      console.log('[FIX v4.0]  группа:', b.getAttribute('data-sa-group-toggle'));
+    });
+  }, 1000);
+
+  console.log('[FIX v4.0] установлен');
+})();
+</script>
 </body>
 </html>
