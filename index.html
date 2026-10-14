@@ -243,7 +243,7 @@ html[data-theme="dark"] .diag-cell-fail{background:rgba(229,62,62,.25);color:#fc
 
 <script>
 /* ============================================================
-   ШКОЛЬНАЯ АНАЛИТИКА — единый скрипт
+   ШКОЛЬНАЯ АНАЛИТИКА — единый скрипт (сборка с фичами A-D)
    ============================================================ */
 const PERIODS = ['I четверть','II четверть','III четверть','IV четверть','Год'];
 const GRADE_TYPES = ['текущая','промежуточная','итоговая'];
@@ -376,6 +376,7 @@ function updateOnlineStatus() {
 window.addEventListener('online', updateOnlineStatus);
 window.addEventListener('offline', updateOnlineStatus);
 updateOnlineStatus();
+
 /* ============================================================
    БАЗА ДАННЫХ
    ============================================================ */
@@ -408,6 +409,18 @@ const DB = {
     if (!this._data.taskResults) this._data.taskResults = [];
     if (!this._data.nextIds.templateId) this._data.nextIds.templateId = 1;
     if (!this._data.nextIds.taskResultId) this._data.nextIds.taskResultId = 1;
+    // Планируемые диагностики
+    if (!Array.isArray(this._data.plannedDiagnostics)) this._data.plannedDiagnostics = [];
+    if (!this._data.nextIds.plannedDiagId) {
+      const maxId = this._data.plannedDiagnostics.reduce((m, p) => Math.max(m, p.id || 0), 0);
+      this._data.nextIds.plannedDiagId = maxId + 1;
+    }
+    // История переводов классов
+    if (!Array.isArray(this._data.classTransitions)) this._data.classTransitions = [];
+    if (!this._data.nextIds.transitionId) {
+      const maxId = this._data.classTransitions.reduce((m, t) => Math.max(m, t.id || 0), 0);
+      this._data.nextIds.transitionId = maxId + 1;
+    }
     // Если шаблонов нет — заливаем демо
     if (!this._data.diagnosticTemplates || this._data.diagnosticTemplates.length === 0) {
       const demo = this._seedDemoDiagnostics();
@@ -605,16 +618,19 @@ const DB = {
       { id:8, classId:3, subject:'Информатика', teacherId:4 },
       { id:9, classId:4, subject:'Математика', teacherId:5 }
     ];
+    const plannedDiagnostics = [];
+    const classTransitions = [];
     return { users, teachers, subjectTeachersList, buildings, classes, students, subjects, grades, diagnostics, subjectTeachers,
              gradesHistory: [], dashboardWidgets: ['stats','classesTable','classesChart'],
              autoReports: { email:'', enabled:false, schedule:'weekly', lastSent:null },
              diagnosticTemplates, taskResults,
+             plannedDiagnostics, classTransitions,
              nextIds: { student:11, grade:gid, diagnostic:7, class:5, teacher:104, building:4, user:5,
-                        subjectTeacher:10, subjectTeacherList:6, noteId:2, templateId:6, taskResultId:trId } };
+                        subjectTeacher:10, subjectTeacherList:6, noteId:2, templateId:6, taskResultId:trId,
+                        plannedDiagId:1, transitionId:1 } };
   },
   nextId(e) { const d = this.load(); const id = d.nextIds[e]; d.nextIds[e]++; this.save(); return id; },
-
-  getUsers() { return this.load().users; },
+    getUsers() { return this.load().users; },
   findUser(l,p) { return this.load().users.find(u => u.login === l && u.password === p); },
   addUser(u) { const d=this.load(); u.id=this.nextId('user'); d.users.push(u); this.save(); return u; },
   updateUser(id,patch) { const d=this.load(); const u=d.users.find(x=>x.id===id); if(u) Object.assign(u,patch); this.save(); },
@@ -783,6 +799,219 @@ const DB = {
     if (r) d.diagnostics = d.diagnostics.filter(x => !(x.studentId === r.studentId && x.templateId === r.templateId));
     d.taskResults = d.taskResults.filter(x => x.id !== id);
     this.save();
+  },
+  /* ---- Массовые операции с классом ---- */
+  renameClass(classId, newName) {
+    const d = this.load();
+    const c = d.classes.find(x => x.id === classId);
+    if (!c) return false;
+    const oldName = c.name;
+    c.name = newName;
+    d.classTransitions.push({
+      id: d.nextIds.transitionId++,
+      classId,
+      oldName,
+      newName,
+      date: todayStr(),
+      year: '2024-2025',
+    });
+    this.save();
+    return true;
+  },
+  getClassTransitions(classId) {
+    return (this.load().classTransitions || []).filter(t => t.classId === classId)
+      .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  },
+  promoteClass(classId, opts) {
+    opts = opts || {};
+    const d = this.load();
+    const c = d.classes.find(x => x.id === classId);
+    if (!c) return null;
+    const m = String(c.name).match(/^(\d+)(.*)$/);
+    if (!m) return null;
+    const oldNum = +m[1];
+    const suffix = m[2] || '';
+    const newNum = oldNum + 1;
+    const newName = `${newNum}${suffix}`;
+    const oldName = c.name;
+    c.name = newName;
+    if (opts.buildingId) c.buildingId = opts.buildingId;
+    if (opts.teacherId !== undefined) c.teacherId = opts.teacherId;
+    d.classTransitions.push({
+      id: d.nextIds.transitionId++,
+      classId,
+      oldName,
+      newName,
+      date: todayStr(),
+      year: opts.year || '2024-2025',
+      note: 'Массовый перевод',
+    });
+    this.save();
+    return { oldName, newName };
+  },
+  /* ---- Автосоздание класса при импорте ---- */
+  findOrCreateClass(className, buildingId) {
+    const d = this.load();
+    let c = d.classes.find(x => x.name === className);
+    if (c) return c;
+    const newClass = {
+      id: d.nextIds.class++,
+      name: className,
+      buildingId: buildingId || (d.buildings[0]?.id || 1),
+      teacherId: null,
+    };
+    d.classes.push(newClass);
+    this.save();
+    return newClass;
+  },
+  /* ---- Планируемые диагностики ---- */
+  getPlannedDiagnostics() {
+    return (this.load().plannedDiagnostics || []).sort((a, b) => (a.plannedDate || '').localeCompare(b.plannedDate || ''));
+  },
+  addPlannedDiagnostic(p) {
+    const d = this.load();
+    p.id = d.nextIds.plannedDiagId++;
+    p.createdAt = new Date().toISOString();
+    p.status = p.status || 'planned';
+    d.plannedDiagnostics.push(p);
+    this.save();
+    return p;
+  },
+  updatePlannedDiagnostic(id, patch) {
+    const d = this.load();
+    const p = d.plannedDiagnostics.find(x => x.id === id);
+    if (p) Object.assign(p, patch);
+    this.save();
+  },
+  deletePlannedDiagnostic(id) {
+    const d = this.load();
+    d.plannedDiagnostics = d.plannedDiagnostics.filter(p => p.id !== id);
+    this.save();
+  },
+  /* ---- Сравнение с предыдущим годом ---- */
+  getClassYearComparison(classId) {
+    const students = this.getStudents().filter(s => s.classId === classId);
+    if (!students.length) return null;
+    const sids = students.map(s => s.id);
+    const allGrades = this.getGrades().filter(g => sids.includes(g.studentId) && /^[2-5]$/.test(g.value));
+    const years = [...new Set(allGrades.map(g => g.year || '2024-2025'))].sort();
+    if (years.length < 2) return { years, perYear: {}, perStudent: [], hasData: false };
+    const perYear = {};
+    years.forEach(y => {
+      const gs = allGrades.filter(g => (g.year || '2024-2025') === y);
+      const sum = gs.reduce((a, g) => a + +g.value, 0);
+      const cnt = gs.length;
+      let quality = 0, success = 0;
+      gs.forEach(g => { if (+g.value >= 4) quality++; if (+g.value >= 3) success++; });
+      perYear[y] = {
+        avg: cnt ? +(sum / cnt).toFixed(2) : 0,
+        count: cnt,
+        quality: cnt ? Math.round(quality / cnt * 100) : 0,
+        success: cnt ? Math.round(success / cnt * 100) : 0,
+      };
+    });
+    const perStudent = students.map(s => {
+      const byYear = {};
+      years.forEach(y => {
+        const gs = allGrades.filter(g => g.studentId === s.id && (g.year || '2024-2025') === y);
+        byYear[y] = gs.length ? +(gs.reduce((a,g) => a + +g.value, 0) / gs.length).toFixed(2) : null;
+      });
+      const vals = years.map(y => byYear[y]).filter(v => v !== null);
+      const diff = vals.length >= 2 ? +(vals[vals.length - 1] - vals[0]).toFixed(2) : null;
+      return { student: s, byYear, diff };
+    }).filter(x => Object.values(x.byYear).some(v => v !== null));
+    return { years, perYear, perStudent, hasData: true };
+  },
+  /* ---- Портрет класса ---- */
+  getClassPortrait(classId) {
+    const students = this.getStudents().filter(s => s.classId === classId);
+    const subjects = this.getSubjects();
+    const classObj = this.getClasses().find(c => c.id === classId);
+    if (!classObj) return null;
+    let totalSum = 0, totalCnt = 0;
+    const categories = { excellent: [], good: [], satisfactory: [], poor: [] };
+    const perSubject = {};
+    subjects.forEach(sub => { perSubject[sub] = { sum: 0, cnt: 0, quality: 0, twos: 0 }; });
+    students.forEach(s => {
+      let sSum = 0, sCnt = 0;
+      subjects.forEach(sub => {
+        const gs = this.getGrades().filter(g => g.studentId === s.id && g.subject === sub && /^[2-5]$/.test(g.value));
+        gs.forEach(g => {
+          sSum += +g.value; sCnt++; totalSum += +g.value; totalCnt++;
+          perSubject[sub].sum += +g.value;
+          perSubject[sub].cnt++;
+          if (+g.value >= 4) perSubject[sub].quality++;
+          if (+g.value === 2) perSubject[sub].twos++;
+        });
+      });
+      const sAvg = sCnt ? sSum / sCnt : 0;
+      const cat = sAvg >= 4.5 ? 'excellent' : sAvg >= 3.5 ? 'good' : sAvg >= 2.5 ? 'satisfactory' : (sCnt ? 'poor' : 'satisfactory');
+      categories[cat].push({ student: s, avg: +sAvg.toFixed(2), count: sCnt });
+    });
+    const overallAvg = totalCnt ? +(totalSum / totalCnt).toFixed(2) : 0;
+    const problemSubjects = Object.entries(perSubject)
+      .filter(([sub, d]) => d.cnt > 0)
+      .map(([sub, d]) => ({
+        subject: sub,
+        avg: d.cnt ? +(d.sum / d.cnt).toFixed(2) : 0,
+        quality: d.cnt ? Math.round(d.quality / d.cnt * 100) : 0,
+        twos: d.twos,
+      }))
+      .sort((a, b) => a.avg - b.avg)
+      .slice(0, 3);
+    const needsAttention = students.map(s => {
+      const r = studentRisk(s.id);
+      return { student: s, risk: r };
+    }).filter(x => x.risk.level === 'high' || x.risk.level === 'medium')
+      .sort((a, b) => b.risk.score - a.risk.score);
+    return {
+      classObj,
+      studentsCount: students.length,
+      overallAvg,
+      categories,
+      problemSubjects,
+      needsAttention,
+      totalGrades: totalCnt,
+    };
+  },
+  /* ---- Карта школы по зданиям ---- */
+  getSchoolMap() {
+    const buildings = this.getBuildings();
+    const classes = this.getClasses();
+    const students = this.getStudents();
+    return buildings.map(b => {
+      const bClasses = classes.filter(c => c.buildingId === b.id);
+      const bStudents = students.filter(s => bClasses.some(c => c.id === s.classId));
+      let sum = 0, cnt = 0, quality = 0;
+      bStudents.forEach(s => {
+        this.getGrades()
+          .filter(g => g.studentId === s.id && /^[2-5]$/.test(g.value))
+          .forEach(g => { sum += +g.value; cnt++; if (+g.value >= 4) quality++; });
+      });
+      const teacher = this.getTeachers();
+      return {
+        building: b,
+        classes: bClasses.map(c => {
+          const cStudents = students.filter(s => s.classId === c.id);
+          let cs = 0, cc = 0, cq = 0;
+          cStudents.forEach(s => {
+            this.getGrades()
+              .filter(g => g.studentId === s.id && /^[2-5]$/.test(g.value))
+              .forEach(g => { cs += +g.value; cc++; if (+g.value >= 4) cq++; });
+          });
+          return {
+            classObj: c,
+            students: cStudents.length,
+            avg: cc ? +(cs / cc).toFixed(2) : null,
+            quality: cc ? Math.round(cq / cc * 100) : null,
+            teacherName: teacher.find(t => t.id === c.teacherId)?.name || '—',
+          };
+        }),
+        students: bStudents.length,
+        avg: cnt ? +(sum / cnt).toFixed(2) : null,
+        quality: cnt ? Math.round(quality / cnt * 100) : null,
+      };
+    });
   }
 };
 
@@ -975,18 +1204,34 @@ function parseStudentsText(text) {
   lines.forEach((line, idx) => {
     const parts = line.split(/\t|;|,/).map(x => x.trim()).filter(Boolean);
     if (!parts.length) return;
-    const isHeader = idx === 0 && parts.some(p => /фамил|имя|отчество|дата|фио/i.test(p));
+    const isHeader = idx === 0 && parts.some(p => /фамил|имя|отчество|дата|фио|класс/i.test(p));
     if (isHeader) return;
-    let lastName = '', firstName = '', middleName = '', birthDate = '';
+    let lastName = '', firstName = '', middleName = '', birthDate = '', className = '';
     if (parts.length === 1) {
       const fio = parts[0].split(/\s+/);
       lastName = fio[0] || ''; firstName = fio[1] || ''; middleName = fio[2] || '';
     } else {
-      lastName = parts[0] || ''; firstName = parts[1] || ''; middleName = parts[2] || '';
-      if (parts[3]) birthDate = normalizeDate(parts[3]);
+      const lastPart = parts[parts.length - 1] || '';
+      const isClassLike = /^\d{1,2}[А-Яа-яA-Za-z]?$/.test(lastPart);
+      if (parts.length >= 5 && isClassLike) {
+        lastName = parts[0]; firstName = parts[1]; middleName = parts[2];
+        birthDate = normalizeDate(parts[3]);
+        className = parts[4];
+      }
+      else if (parts.length === 4 && isClassLike) {
+        lastName = parts[0]; firstName = parts[1]; middleName = parts[2];
+        className = parts[3];
+      }
+      else if (parts.length === 4) {
+        lastName = parts[0]; firstName = parts[1]; middleName = parts[2];
+        birthDate = normalizeDate(parts[3]);
+      }
+      else {
+        lastName = parts[0] || ''; firstName = parts[1] || ''; middleName = parts[2] || '';
+      }
     }
     if (!lastName) return;
-    result.push({ lastName, firstName, middleName, birthDate });
+    result.push({ lastName, firstName, middleName, birthDate, className });
   });
   return result;
 }
@@ -1078,7 +1323,6 @@ function renderChartToImage(type, width, height, config) {
   tmp.destroy(); c.remove();
   return `<img src="${url}" class="chart-img" alt="График">`;
 }
-
 /* ============================================================
    РЕНДЕР: HEADER
    ============================================================ */
@@ -1124,6 +1368,7 @@ const NAV_GROUPS = [
     { key:'analytics/risks', icon:'alert', label:'Риски' },
     { key:'analytics/teachers', icon:'user', label:'Учителя' },
     { key:'diagnostics/templates', icon:'check', label:'Диагностики' },
+    { key:'diagnostics/calendar', icon:'list', label:'Календарь диагностик' },
     { key:'reports/quality', icon:'award', label:'Отчёты школы' }
   ]},
   { type:'group', key:'work', icon:'edit', label:'Работа', adminOnly:true, items:[
@@ -1849,14 +2094,24 @@ function openStudent(id) {
   location.hash = 'student/' + id;
 }
 function openStudentsPasteModal() {
+  const buildings = DB.getBuildings();
   showModal(`
     <h2>${icon('upload', 20)} Импорт учеников</h2>
-    <div class="alert alert-info">${icon('info', 14)} Формат: <b>Фамилия Имя Отчество ДатаРождения</b> (через пробел или таб). По одному ученику в строке.</div>
-    <div class="form-group mb-16"><label>Класс для добавления</label>
-      <select id="imp_class">${DB.getClasses().map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></div>
-    <div class="form-group mb-16"><label>Список</label>
-      <textarea class="paste-area" id="imp_text" placeholder="Иванов Иван Иванович 15.03.2012
-Петрова Мария Сергеевна 22.07.2012"></textarea></div>
+    <div class="alert alert-info">${icon('info', 14)}
+      Формат: <b>Фамилия; Имя; Отчество; ДатаРождения; Класс</b><br>
+      Разделители — <code>;</code> <code>,</code> или таб (Ctrl+V из Excel).<br>
+      Если класса нет — он <b>создастся автоматически</b>.
+    </div>
+    <div class="form-grid mb-16">
+      <div class="form-group"><label>Здание для новых классов</label>
+        <select id="imp_building">${buildings.map(b => `<option value="${b.id}">${esc(b.name)}</option>`).join('')}</select></div>
+      <div class="form-group"><label>Класс по умолчанию (если не указан)</label>
+        <select id="imp_class"><option value="">— из строки —</option>${DB.getClasses().map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></div>
+    </div>
+    <div class="form-group mb-16"><label>Список учеников</label>
+      <textarea class="paste-area" id="imp_text" placeholder="Иванов;Иван;Иванович;15.03.2012;5А
+Петрова;Мария;Сергеевна;22.07.2012;5А
+Сидоров;Пётр;Алексеевич;01.09.2011;6Б"></textarea></div>
     <div class="form-actions">
       <button class="btn btn-primary" onclick="applyImportStudents()">${icon('check', 14)} Импортировать</button>
       <button class="btn btn-outline" onclick="closeModal()">Отмена</button>
@@ -1864,14 +2119,46 @@ function openStudentsPasteModal() {
   `);
 }
 function applyImportStudents() {
-  const cid = +document.getElementById('imp_class').value;
+  const buildingId = +document.getElementById('imp_building').value || null;
+  const defaultClassId = +document.getElementById('imp_class').value || null;
   const text = document.getElementById('imp_text').value;
   const list = parseStudentsText(text);
   if (!list.length) { showToast('Нет данных', 'error'); return; }
+
   UndoStack.push(`Импорт учеников (${list.length})`);
-  list.forEach(s => DB.addStudent({ ...s, classId: cid }));
+  let createdClasses = 0;
+  let addedStudents = 0;
+
+  list.forEach(s => {
+    let cid = null;
+    if (s.className) {
+      const existing = DB.getClasses().find(c => c.name.toLowerCase() === s.className.toLowerCase());
+      if (existing) {
+        cid = existing.id;
+      } else {
+        const newC = DB.findOrCreateClass(s.className, buildingId);
+        cid = newC.id;
+        createdClasses++;
+      }
+    } else if (defaultClassId) {
+      cid = defaultClassId;
+    } else {
+      return;
+    }
+    DB.addStudent({
+      lastName: s.lastName,
+      firstName: s.firstName,
+      middleName: s.middleName,
+      birthDate: s.birthDate,
+      classId: cid,
+    });
+    addedStudents++;
+  });
+
   closeModal();
-  showToast(`Добавлено: ${list.length}`, 'success');
+  let msg = `Добавлено учеников: ${addedStudents}`;
+  if (createdClasses > 0) msg += ` · создано классов: ${createdClasses}`;
+  showToast(msg, 'success', 5000);
   render();
 }
 function openStudentsCsvModal() {
@@ -2090,6 +2377,482 @@ function delDiag(id) {
   DB.deleteDiagnostic(id);
   showToast('Удалено', 'success'); render();
 }
+/* ============================================================
+   МАССОВЫЕ ОПЕРАЦИИ С КЛАССОМ
+   ============================================================ */
+function promoteClassForm(classId) {
+  const c = DB.getClasses().find(x => x.id === classId);
+  if (!c) return;
+  const m = String(c.name).match(/^(\d+)(.*)$/);
+  if (!m) { showToast('Не удалось распознать номер класса', 'error'); return; }
+  const newName = `${+m[1] + 1}${m[2] || ''}`;
+  const buildings = DB.getBuildings();
+  const teachers = DB.getTeachers();
+  showModal(`
+    <h2>${icon('trending-up', 20)} Перевод класса</h2>
+    <div class="alert alert-info">${icon('info', 14)} Класс <b>${esc(c.name)}</b> будет переименован в <b>${esc(newName)}</b>. Все оценки, ученики и назначения сохранятся.</div>
+    <div class="form-grid">
+      <div class="form-group" style="grid-column:1/-1;"><label>Новое название</label>
+        <input id="promote_name" value="${esc(newName)}"></div>
+      <div class="form-group"><label>Здание (не менять — оставить)</label>
+        <select id="promote_building"><option value="">— оставить —</option>${buildings.map(b => `<option value="${b.id}">${esc(b.name)}</option>`).join('')}</select></div>
+      <div class="form-group"><label>Кл. руководитель (не менять — оставить)</label>
+        <select id="promote_teacher"><option value="">— оставить —</option>${teachers.map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join('')}</select></div>
+    </div>
+    <div class="alert alert-warn" style="margin-top:16px;">${icon('alert', 14)} После перевода класс будет отображаться под новым названием. Отменить можно кнопкой «Отмена» сверху, пока не вышли из приложения.</div>
+    <div class="form-actions">
+      <button class="btn btn-warn" onclick="applyPromoteClass(${classId})">${icon('check', 14)} Перевести</button>
+      <button class="btn btn-outline" onclick="closeModal()">Отмена</button>
+    </div>
+  `);
+}
+function applyPromoteClass(classId) {
+  const name = document.getElementById('promote_name').value.trim();
+  if (!name) { showToast('Укажите название', 'error'); return; }
+  const buildingId = +document.getElementById('promote_building').value || null;
+  const teacherIdRaw = document.getElementById('promote_teacher').value;
+  const teacherId = teacherIdRaw === '' ? undefined : +teacherIdRaw;
+  UndoStack.push(`Перевод класса → ${name}`);
+  const result = DB.promoteClass(classId, { buildingId, teacherId });
+  if (!result) { showToast('Ошибка перевода', 'error'); return; }
+  closeModal();
+  showToast(`${result.oldName} → ${result.newName}`, 'success');
+  render();
+}
+
+/* ============================================================
+   ПЕЧАТЬ СПИСКА КЛАССА
+   ============================================================ */
+function printClassList(classId) {
+  const c = DB.getClasses().find(x => x.id === classId);
+  if (!c) return;
+  const b = DB.getBuildings().find(x => x.id === c.buildingId);
+  const t = DB.getTeachers().find(x => x.id === c.teacherId);
+  const students = DB.getStudents().filter(s => s.classId === classId)
+    .sort((a, b) => a.lastName.localeCompare(b.lastName, 'ru'));
+  if (!students.length) { showToast('В классе нет учеников', 'error'); return; }
+
+  const today = new Date().toLocaleDateString('ru-RU');
+  const year = new Date().getFullYear();
+  let html = `
+    <h1>Список обучающихся</h1>
+    <h2>${esc(c.name)} класс${b ? ' · ' + esc(b.name) : ''} · ${year}-${year + 1} учебный год</h2>
+    <table class="info-table">
+      <tr><td>Классный руководитель:</td><td>${esc(t ? t.name : '—')}</td></tr>
+      <tr><td>Количество обучающихся:</td><td>${students.length}</td></tr>
+      <tr><td>Дата формирования:</td><td>${today}</td></tr>
+    </table>
+    <h3>Список</h3>
+    <table>
+      <thead>
+        <tr>
+          <th style="width:50px;">№</th>
+          <th class="left">Фамилия, имя, отчество</th>
+          <th style="width:130px;">Дата рождения</th>
+          <th style="width:180px;">Подпись</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${students.map((s, i) => `
+          <tr>
+            <td>${i + 1}</td>
+            <td class="left">${esc(fullName(s))}</td>
+            <td>${esc(fmtDate(s.birthDate))}</td>
+            <td></td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+    <div class="sig">
+      <div>Классный руководитель: ___________________ / ${esc(t ? t.name : '____________')}</div>
+      <div>Дата: «____» ____________ ${year} г.</div>
+    </div>
+  `;
+  exportPDF(html, `Список — ${c.name}`);
+}
+
+function printAllClassLists() {
+  const classes = allowedClasses();
+  if (!classes.length) { showToast('Нет доступных классов', 'error'); return; }
+  const today = new Date().toLocaleDateString('ru-RU');
+  const year = new Date().getFullYear();
+  let html = `<h1>Списки обучающихся по классам</h1>
+    <h2>${year}-${year + 1} учебный год · Дата формирования: ${today}</h2>`;
+  classes.forEach(c => {
+    const b = DB.getBuildings().find(x => x.id === c.buildingId);
+    const t = DB.getTeachers().find(x => x.id === c.teacherId);
+    const students = DB.getStudents().filter(s => s.classId === c.id)
+      .sort((a, b) => a.lastName.localeCompare(b.lastName, 'ru'));
+    if (!students.length) return;
+    html += `<div style="page-break-before:always;"></div>
+      <h2 style="text-align:left;color:#000;margin-top:20px;">${esc(c.name)} класс${b ? ' · ' + esc(b.name) : ''}</h2>
+      <table class="info-table" style="margin-bottom:10px;">
+        <tr><td>Кл. руководитель:</td><td>${esc(t ? t.name : '—')}</td></tr>
+        <tr><td>Учеников:</td><td>${students.length}</td></tr>
+      </table>
+      <table>
+        <thead><tr><th style="width:50px;">№</th><th class="left">ФИО</th><th style="width:130px;">Дата рождения</th><th style="width:150px;">Подпись</th></tr></thead>
+        <tbody>
+          ${students.map((s, i) => `<tr><td>${i + 1}</td><td class="left">${esc(fullName(s))}</td><td>${esc(fmtDate(s.birthDate))}</td><td></td></tr>`).join('')}
+        </tbody>
+      </table>
+      <div class="sig" style="margin-top:30px;">
+        <div>Кл. руководитель: ___________________ / ${esc(t ? t.name : '____________')}</div>
+        <div>Дата: «____» ____________ ${year} г.</div>
+      </div>
+    `;
+  });
+  exportPDF(html, 'Списки классов');
+}
+
+/* ============================================================
+   ПОРТРЕТ КЛАССА
+   ============================================================ */
+function openClassPortrait(classId) {
+  const p = DB.getClassPortrait(classId);
+  if (!p) { showToast('Класс не найден', 'error'); return; }
+  const c = p.classObj;
+  const b = DB.getBuildings().find(x => x.id === c.buildingId);
+  const t = DB.getTeachers().find(x => x.id === c.teacherId);
+
+  const catRows = [
+    { key: 'excellent', label: 'Отличники', color: 'var(--success)', icon: '🥇' },
+    { key: 'good', label: 'Хорошисты', color: 'var(--primary)', icon: '🥈' },
+    { key: 'satisfactory', label: 'Троечники', color: 'var(--warning)', icon: '📘' },
+    { key: 'poor', label: 'Неуспевающие', color: 'var(--danger)', icon: '⚠' },
+  ].map(x => `
+    <div class="stat-card" style="border-left-color:${x.color};">
+      <div class="num" style="color:${x.color};">${p.categories[x.key].length}</div>
+      <div class="lbl">${x.icon} ${x.label}</div>
+    </div>
+  `).join('');
+
+  const problemRows = p.problemSubjects.map(ps => `
+    <tr>
+      <td><b>${esc(ps.subject)}</b></td>
+      <td class="text-right">${ps.avg}</td>
+      <td class="text-right">${ps.quality}%</td>
+      <td class="text-right">${ps.twos > 0 ? `<span class="badge badge-red">${ps.twos}</span>` : '—'}</td>
+    </tr>
+  `).join('');
+
+  const attentionRows = p.needsAttention.length ? p.needsAttention.map(x => {
+    const color = x.risk.level === 'high' ? 'var(--danger)' : 'var(--warning)';
+    return `<tr class="risk-${x.risk.level}">
+      <td><b>${esc(fullName(x.student))}</b></td>
+      <td class="text-right">${x.risk.avg ? x.risk.avg.toFixed(2) : '—'}</td>
+      <td><span class="badge ${x.risk.level === 'high' ? 'badge-red' : 'badge-orange'}">${x.risk.level === 'high' ? 'высокий' : 'средний'}</span></td>
+      <td style="font-size:12px;">${esc(x.risk.reasons.join(' · ') || '—')}</td>
+      <td class="text-right"><button class="btn btn-outline btn-sm btn-icon" onclick="openStudent(${x.student.id})" title="Карточка">${icon('user', 12)}</button></td>
+    </tr>`;
+  }).join('') : `<tr><td colspan="5" class="muted" style="text-align:center;">Никто не требует внимания 🎉</td></tr>`;
+
+  showModal(`
+    <h2>${icon('chart', 20)} Портрет класса · ${esc(c.name)}</h2>
+    <div class="row-flex" style="gap:10px;flex-wrap:wrap;margin-bottom:16px;">
+      <span class="badge badge-blue">${esc(b ? b.name : '— здание —')}</span>
+      <span class="badge badge-purple">${esc(t ? t.name : '— классный руководитель —')}</span>
+      <span class="badge badge-green">${p.studentsCount} учеников</span>
+      <span class="badge badge-orange">Средний: ${p.overallAvg}</span>
+    </div>
+
+    <h3>Категории учеников</h3>
+    <div class="stats-grid" style="margin-bottom:20px;">${catRows}</div>
+
+    <h3>Топ-3 западающих предмета</h3>
+    ${p.problemSubjects.length ? `<div class="table-wrap" style="margin-bottom:20px;">
+      <table><thead><tr><th>Предмет</th><th class="text-right">Ср. балл</th><th class="text-right">Качество</th><th class="text-right">Двоек</th></tr></thead>
+      <tbody>${problemRows}</tbody></table>
+    </div>` : `<div class="muted" style="margin-bottom:20px;">Недостаточно данных</div>`}
+
+    <h3>Требуют внимания (${p.needsAttention.length})</h3>
+    <div class="table-wrap" style="margin-bottom:20px;">
+      <table><thead><tr><th>ФИО</th><th class="text-right">Ср. балл</th><th>Уровень</th><th>Причины</th><th></th></tr></thead>
+      <tbody>${attentionRows}</tbody></table>
+    </div>
+
+    <h3>Список отличников</h3>
+    ${p.categories.excellent.length ? `<div class="table-wrap" style="margin-bottom:16px;">
+      <table><thead><tr><th>ФИО</th><th class="text-right">Ср. балл</th><th class="text-right">Оценок</th></tr></thead>
+      <tbody>${p.categories.excellent.map(x => `<tr><td>${esc(fullName(x.student))}</td><td class="text-right">${x.avg}</td><td class="text-right">${x.count}</td></tr>`).join('')}</tbody></table>
+    </div>` : `<div class="muted">Отличников нет</div>`}
+
+    <div class="form-actions" style="margin-top:20px;">
+      <button class="btn btn-success" onclick="printClassPortrait(${classId})">${icon('file-pdf', 14)} Печать портрета</button>
+      <button class="btn btn-outline" onclick="closeModal()">Закрыть</button>
+    </div>
+  `);
+}
+
+function printClassPortrait(classId) {
+  const p = DB.getClassPortrait(classId);
+  if (!p) return;
+  const c = p.classObj;
+  const b = DB.getBuildings().find(x => x.id === c.buildingId);
+  const t = DB.getTeachers().find(x => x.id === c.teacherId);
+  const today = new Date().toLocaleDateString('ru-RU');
+  let html = `
+    <h1>Портрет класса</h1>
+    <h2>${esc(c.name)} · ${esc(b ? b.name : '')} · ${today}</h2>
+    <table class="info-table">
+      <tr><td>Кл. руководитель:</td><td>${esc(t ? t.name : '—')}</td></tr>
+      <tr><td>Учеников:</td><td>${p.studentsCount}</td></tr>
+      <tr><td>Средний балл:</td><td><b>${p.overallAvg}</b></td></tr>
+      <tr><td>Всего оценок:</td><td>${p.totalGrades}</td></tr>
+    </table>
+    <h3>Категории</h3>
+    <table><thead><tr><th class="left">Категория</th><th>Количество</th></tr></thead><tbody>
+      <tr><td class="left">Отличники (5)</td><td>${p.categories.excellent.length}</td></tr>
+      <tr><td class="left">Хорошисты (4)</td><td>${p.categories.good.length}</td></tr>
+      <tr><td class="left">Троечники (3)</td><td>${p.categories.satisfactory.length}</td></tr>
+      <tr><td class="left">Неуспевающие (2)</td><td>${p.categories.poor.length}</td></tr>
+    </tbody></table>
+    ${p.problemSubjects.length ? `
+      <h3>Западающие предметы</h3>
+      <table><thead><tr><th class="left">Предмет</th><th>Ср. балл</th><th>Качество</th><th>Двоек</th></tr></thead><tbody>
+        ${p.problemSubjects.map(ps => `<tr><td class="left">${esc(ps.subject)}</td><td>${ps.avg}</td><td>${ps.quality}%</td><td>${ps.twos}</td></tr>`).join('')}
+      </tbody></table>
+    ` : ''}
+    ${p.needsAttention.length ? `
+      <h3>Требуют внимания</h3>
+      <table><thead><tr><th class="left">ФИО</th><th>Ср. балл</th><th>Уровень</th><th class="left">Причины</th></tr></thead><tbody>
+        ${p.needsAttention.map(x => `<tr><td class="left">${esc(fullName(x.student))}</td><td>${x.risk.avg ? x.risk.avg.toFixed(2) : '—'}</td><td>${x.risk.level === 'high' ? 'высокий' : 'средний'}</td><td class="left">${esc(x.risk.reasons.join(', ') || '—')}</td></tr>`).join('')}
+      </tbody></table>
+    ` : ''}
+    <div class="sig" style="margin-top:40px;">
+      <div>Кл. руководитель: ___________________ / ${esc(t ? t.name : '____________')}</div>
+      <div>Дата: «____» ____________ ${new Date().getFullYear()} г.</div>
+    </div>
+  `;
+  exportPDF(html, `Портрет класса — ${c.name}`);
+}
+
+/* ============================================================
+   КАРТА ШКОЛЫ ПО ЗДАНИЯМ
+   ============================================================ */
+function openSchoolMap() {
+  const map = DB.getSchoolMap();
+  if (!map.length) { showToast('Нет данных о зданиях', 'error'); return; }
+
+  const cards = map.map(b => {
+    const rows = b.classes.length ? b.classes.map(c => `
+      <tr>
+        <td><b>${esc(c.classObj.name)}</b></td>
+        <td>${esc(c.teacherName)}</td>
+        <td class="text-right">${c.students}</td>
+        <td class="text-right">${c.avg !== null ? `<span class="badge ${c.avg >= 4 ? 'badge-green' : c.avg >= 3.5 ? 'badge-blue' : c.avg >= 3 ? 'badge-orange' : 'badge-red'}">${c.avg}</span>` : '—'}</td>
+        <td class="text-right">${c.quality !== null ? c.quality + '%' : '—'}</td>
+      </tr>
+    `).join('') : `<tr><td colspan="5" class="muted" style="text-align:center;">Нет классов</td></tr>`;
+
+    return `
+      <div class="card" style="margin-bottom:16px;">
+        <div class="row-flex" style="justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:12px;">
+          <div>
+            <h3 style="margin:0 0 4px;">${icon('building', 18)} ${esc(b.building.name)}</h3>
+            <div class="row-flex" style="gap:8px;">
+              <span class="badge badge-blue">${b.classes.length} кл.</span>
+              <span class="badge badge-purple">${b.students} уч.</span>
+              ${b.avg !== null ? `<span class="badge badge-green">Средний: ${b.avg}</span>` : ''}
+              ${b.quality !== null ? `<span class="badge badge-orange">Качество: ${b.quality}%</span>` : ''}
+            </div>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table><thead><tr><th>Класс</th><th>Кл. руководитель</th><th class="text-right">Учеников</th><th class="text-right">Ср. балл</th><th class="text-right">Качество</th></tr></thead>
+          <tbody>${rows}</tbody></table>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  showModal(`
+    <h2>${icon('grid', 20)} Карта школы по зданиям</h2>
+    <div class="row-flex" style="gap:12px;flex-wrap:wrap;margin-bottom:16px;">
+      ${map.map(b => `<div class="stat-card" style="flex:1;min-width:180px;border-left-color:var(--primary);">
+        <div class="num">${b.classes.length}</div>
+        <div class="lbl">${esc(b.building.name)}</div>
+      </div>`).join('')}
+    </div>
+    ${cards}
+    <div class="form-actions">
+      <button class="btn btn-success" onclick="printSchoolMap()">${icon('file-pdf', 14)} Печать карты</button>
+      <button class="btn btn-outline" onclick="closeModal()">Закрыть</button>
+    </div>
+  `);
+}
+
+function printSchoolMap() {
+  const map = DB.getSchoolMap();
+  const today = new Date().toLocaleDateString('ru-RU');
+  let html = `<h1>Карта школы по зданиям</h1><h2>${today}</h2>`;
+  map.forEach(b => {
+    html += `<div style="page-break-before:always;"></div>
+      <h2 style="text-align:left;color:#000;">${esc(b.building.name)}</h2>
+      <table class="info-table" style="margin-bottom:10px;">
+        <tr><td>Классов:</td><td>${b.classes.length}</td></tr>
+        <tr><td>Учеников:</td><td>${b.students}</td></tr>
+        ${b.avg !== null ? `<tr><td>Средний балл:</td><td>${b.avg}</td></tr>` : ''}
+        ${b.quality !== null ? `<tr><td>Качество:</td><td>${b.quality}%</td></tr>` : ''}
+      </table>
+      <table><thead><tr><th class="left">Класс</th><th class="left">Кл. руководитель</th><th>Учеников</th><th>Ср. балл</th><th>Качество</th></tr></thead><tbody>
+        ${b.classes.map(c => `<tr><td class="left">${esc(c.classObj.name)}</td><td class="left">${esc(c.teacherName)}</td><td>${c.students}</td><td>${c.avg ?? '—'}</td><td>${c.quality !== null ? c.quality + '%' : '—'}</td></tr>`).join('')}
+      </tbody></table>
+    `;
+  });
+  exportPDF(html, 'Карта школы');
+}
+
+/* ============================================================
+   СРАВНЕНИЕ С ПРЕДЫДУЩИМ ГОДОМ
+   ============================================================ */
+function openClassComparison(classId) {
+  const comp = DB.getClassYearComparison(classId);
+  const c = DB.getClasses().find(x => x.id === classId);
+  if (!c) { showToast('Класс не найден', 'error'); return; }
+
+  if (!comp || !comp.hasData) {
+    showModal(`
+      <h2>${icon('trending-up', 20)} Сравнение · ${esc(c.name)}</h2>
+      <div class="alert alert-warn">${icon('alert', 14)}
+        Недостаточно данных для сравнения. Нужны оценки как минимум за 2 учебных года по одним и тем же ученикам.
+      </div>
+      <div class="form-actions">
+        <button class="btn btn-outline" onclick="closeModal()">Закрыть</button>
+      </div>
+    `);
+    return;
+  }
+
+  const years = comp.years;
+  const firstYear = years[0];
+  const lastYear = years[years.length - 1];
+  const y1 = comp.perYear[firstYear];
+  const y2 = comp.perYear[lastYear];
+
+  const diffAvg = y1 && y2 ? +(y2.avg - y1.avg).toFixed(2) : 0;
+  const diffQuality = y1 && y2 ? y2.quality - y1.quality : 0;
+  const diffSuccess = y1 && y2 ? y2.success - y1.success : 0;
+
+  const arrow = v => v > 0 ? '↑' : v < 0 ? '↓' : '→';
+  const color = v => v > 0 ? 'var(--success)' : v < 0 ? 'var(--danger)' : 'var(--text-muted)';
+  const sign = v => v > 0 ? '+' : '';
+
+  const yearsRows = years.map(y => {
+    const d = comp.perYear[y];
+    if (!d) return '';
+    return `<tr><td><b>${y}</b></td>
+      <td class="text-right">${d.avg}</td>
+      <td class="text-right">${d.quality}%</td>
+      <td class="text-right">${d.success}%</td>
+      <td class="text-right">${d.count}</td></tr>`;
+  }).join('');
+
+  const sorted = [...comp.perStudent].sort((a, b) => (b.diff ?? -99) - (a.diff ?? -99));
+  const grew = sorted.filter(x => x.diff !== null && x.diff > 0);
+  const fell = sorted.filter(x => x.diff !== null && x.diff < 0);
+  const stayed = sorted.filter(x => x.diff !== null && x.diff === 0);
+
+  const studentRows = sorted.map(x => {
+    const v = x.diff;
+    const dColor = v === null ? 'var(--text-muted)' : color(v);
+    const dText = v === null ? '—' : `${arrow(v)} ${sign(v)}${v}`;
+    return `<tr>
+      <td><b>${esc(fullName(x.student))}</b></td>
+      ${years.map(y => `<td class="text-right">${x.byYear[y] !== null ? x.byYear[y] : '—'}</td>`).join('')}
+      <td class="text-right"><b style="color:${dColor};">${dText}</b></td>
+    </tr>`;
+  }).join('');
+
+  showModal(`
+    <h2>${icon('trending-up', 20)} Сравнение · ${esc(c.name)}</h2>
+
+    <div class="alert alert-info">${icon('info', 14)}
+      Сравнение тех же учеников за разные годы. Год берётся из поля <b>«учебный год»</b> в оценках.
+    </div>
+
+    <h3>Сводка по годам</h3>
+    <div class="stats-grid" style="margin-bottom:20px;">
+      <div class="stat-card"><div class="num">${y1 ? y1.avg : '—'}</div><div class="lbl">${firstYear} средний</div></div>
+      <div class="stat-card"><div class="num">${y2 ? y2.avg : '—'}</div><div class="lbl">${lastYear} средний</div></div>
+      <div class="stat-card" style="border-left-color:${color(diffAvg)};">
+        <div class="num" style="color:${color(diffAvg)};">${arrow(diffAvg)} ${sign(diffAvg)}${diffAvg}</div>
+        <div class="lbl">Динамика среднего</div></div>
+      <div class="stat-card" style="border-left-color:${color(diffQuality)};">
+        <div class="num" style="color:${color(diffQuality)};">${arrow(diffQuality)} ${sign(diffQuality)}${diffQuality}%</div>
+        <div class="lbl">Динамика качества</div></div>
+    </div>
+
+    <h3>По годам</h3>
+    <div class="table-wrap" style="margin-bottom:20px;">
+      <table>
+        <thead><tr><th>Год</th><th class="text-right">Ср. балл</th><th class="text-right">Качество</th><th class="text-right">Успеваемость</th><th class="text-right">Оценок</th></tr></thead>
+        <tbody>${yearsRows}</tbody></table>
+    </div>
+
+    <h3>Динамика по каждому ученику</h3>
+    <div class="row-flex" style="gap:10px;margin-bottom:12px;">
+      <span class="badge badge-green">Растут: ${grew.length}</span>
+      <span class="badge badge-red">Падают: ${fell.length}</span>
+      <span class="badge badge-gray">Без изменений: ${stayed.length}</span>
+    </div>
+    <div class="table-wrap" style="margin-bottom:20px;max-height:400px;overflow:auto;">
+      <table>
+        <thead><tr><th>Ученик</th>${years.map(y => `<th class="text-right">${y}</th>`).join('')}<th class="text-right">Δ</th></tr></thead>
+        <tbody>${studentRows}</tbody></table>
+    </div>
+
+    <div class="form-actions">
+      <button class="btn btn-success" onclick="printClassComparison(${classId})">${icon('file-pdf', 14)} Печать сравнения</button>
+      <button class="btn btn-outline" onclick="closeModal()">Закрыть</button>
+    </div>
+  `);
+}
+
+function printClassComparison(classId) {
+  const comp = DB.getClassYearComparison(classId);
+  const c = DB.getClasses().find(x => x.id === classId);
+  if (!comp || !comp.hasData) { showToast('Недостаточно данных', 'error'); return; }
+  const years = comp.years;
+  const firstYear = years[0];
+  const lastYear = years[years.length - 1];
+  const y1 = comp.perYear[firstYear];
+  const y2 = comp.perYear[lastYear];
+  const diffAvg = y1 && y2 ? +(y2.avg - y1.avg).toFixed(2) : 0;
+  const diffQuality = y1 && y2 ? y2.quality - y1.quality : 0;
+  const today = new Date().toLocaleDateString('ru-RU');
+
+  let html = `<h1>Сравнение успеваемости по годам</h1>
+    <h2>${esc(c.name)} · ${firstYear} → ${lastYear} · ${today}</h2>
+    <table class="info-table">
+      <tr><td>Средний балл ${firstYear}:</td><td>${y1 ? y1.avg : '—'}</td></tr>
+      <tr><td>Средний балл ${lastYear}:</td><td>${y2 ? y2.avg : '—'}</td></tr>
+      <tr><td>Динамика среднего балла:</td><td><b>${diffAvg > 0 ? '+' : ''}${diffAvg}</b></td></tr>
+      <tr><td>Динамика качества знаний:</td><td><b>${diffQuality > 0 ? '+' : ''}${diffQuality}%</b></td></tr>
+    </table>
+    <h3>По годам</h3>
+    <table><thead><tr><th class="left">Год</th><th>Ср. балл</th><th>Качество</th><th>Успеваемость</th><th>Оценок</th></tr></thead><tbody>
+      ${years.map(y => {
+        const d = comp.perYear[y];
+        if (!d) return '';
+        return `<tr><td class="left">${y}</td><td>${d.avg}</td><td>${d.quality}%</td><td>${d.success}%</td><td>${d.count}</td></tr>`;
+      }).join('')}
+    </tbody></table>
+    <h3>Динамика по ученикам</h3>
+    <table><thead><tr><th class="left">Ученик</th>${years.map(y => `<th>${y}</th>`).join('')}<th>Δ</th></tr></thead><tbody>
+      ${comp.perStudent.map(x => {
+        const v = x.diff;
+        const dText = v === null ? '—' : (v > 0 ? '+' : '') + v;
+        return `<tr><td class="left">${esc(fullName(x.student))}</td>${years.map(y => `<td>${x.byYear[y] !== null ? x.byYear[y] : '—'}</td>`).join('')}<td>${dText}</td></tr>`;
+      }).join('')}
+    </tbody></table>
+    <div class="sig">
+      <div>Кл. руководитель: ___________________ / ____________</div>
+      <div>Дата: «____» ____________ ${new Date().getFullYear()} г.</div>
+    </div>
+  `;
+  exportPDF(html, `Сравнение — ${c.name}`);
+}
 
 /* ============================================================
    КЛАССЫ
@@ -2114,6 +2877,11 @@ function renderClasses() {
       <td class="text-right nowrap"><div class="btn-group" style="justify-content:flex-end;">
         <button class="btn btn-outline btn-sm btn-icon" onclick="studentFilter.classId=${c.id};go('students')" title="Ученики">${icon('users', 12)}</button>
         <button class="btn btn-success btn-sm btn-icon" onclick="exportClass(${c.id})" title="PDF">${icon('file-pdf', 12)}</button>
+        <button class="btn btn-warn btn-sm btn-icon" onclick="printClassList(${c.id})" title="Печать списка">${icon('list', 12)}</button>
+        <button class="btn btn-outline btn-sm btn-icon" onclick="openClassPortrait(${c.id})" title="Портрет класса">${icon('chart', 12)}</button>
+        <button class="btn btn-outline btn-sm btn-icon" onclick="openClassComparison(${c.id})" title="Сравнить с прошлым годом">${icon('trending-up', 12)}</button>
+        ${(isAdmin || SESSION.role === 'director') ? `
+          <button class="btn btn-outline btn-sm btn-icon" onclick="promoteClassForm(${c.id})" title="Перевести в следующий класс">${icon('trending-up', 12)}</button>` : ''}
         ${isAdmin ? `
           <button class="btn btn-outline btn-sm btn-icon" onclick="classForm(${c.id})" title="Редактировать">${icon('edit', 12)}</button>
           <button class="btn btn-danger btn-sm btn-icon" onclick="delClass(${c.id})" title="Удалить">${icon('trash', 12)}</button>` : ''}
@@ -2124,7 +2892,11 @@ function renderClasses() {
     <div class="card">
       <div class="row-flex" style="justify-content:space-between;margin-bottom:16px;">
         <h2 style="margin:0;">${icon('building', 20)} Классы</h2>
-        ${isAdmin ? `<button class="btn btn-primary btn-sm" onclick="classForm()" title="Добавить">${icon('plus', 14)} Добавить</button>` : ''}
+        <div class="btn-group">
+          <button class="btn btn-outline btn-sm" onclick="printAllClassLists()" title="Печать списков">${icon('list', 14)} Печать списков</button>
+          <button class="btn btn-outline btn-sm" onclick="openSchoolMap()" title="Карта школы">${icon('grid', 14)} Карта школы</button>
+          ${isAdmin ? `<button class="btn btn-primary btn-sm" onclick="classForm()" title="Добавить">${icon('plus', 14)} Добавить</button>` : ''}
+        </div>
       </div>
       ${classes.length ? `<div class="table-wrap"><table>
         <thead><tr><th>Класс</th><th class="hide-mobile">Здание</th><th class="hide-mobile">Рук-ль</th>
@@ -2451,7 +3223,6 @@ function delTeacherNote(teacherId, noteId) {
   DB.deleteNote(teacherId, noteId);
   render();
 }
-
 /* ============================================================
    ЖУРНАЛ
    ============================================================ */
@@ -2869,6 +3640,7 @@ function sendReportNow() {
   showToast('Открыто письмо', 'success');
   closeModal();
 }
+
 /* ============================================================
    ЭКСПОРТ PDF: ученик / класс / учитель
    ============================================================ */
@@ -3236,7 +4008,7 @@ function doExportArchive() {
 }
 
 /* ============================================================
-   АНАЛИТИКА — общий роутер подвкладок
+   АНАЛИТИКА — общий роутер
    ============================================================ */
 let analyticsFilter = { classId:'', subject:'', period:'', tab: 'main', ratingMcko: '', parallel: '' };
 function renderAnalytics() {
@@ -3614,7 +4386,6 @@ function renderAnalyticsTeachers(tabs) {
     </div>
   `, 'analytics');
 }
-
 /* ============================================================
    УНИВЕРСАЛЬНЫЙ ОТРИСОВЩИК ГРАФИКОВ
    ============================================================ */
@@ -3691,7 +4462,6 @@ function redrawPendingCharts() {
                   y: { ticks: { color: textColor }, grid: { display: false } } } }
     });
   }
-  // График параллелей
   const cP = document.getElementById('parallelsChart');
   if (cP && window._parallelsChartData && cP.offsetWidth > 0) {
     drawParallelsChart();
@@ -3777,6 +4547,7 @@ function diagLevelColor(l) { return l === 'высокий' ? 'var(--success)' : 
 
 let diagInputState = { templateId:'', classId:'', draft:{} };
 let diagAnalyticsState = { mode:'class', templateId:'', classId:'', studentId:'' };
+let diagCalendarFilter = { month: '', type: '' };
 
 function renderDiagnosticsPage(subtab) {
   if (!SESSION) { renderLogin(); return; }
@@ -3785,11 +4556,13 @@ function renderDiagnosticsPage(subtab) {
   if (subtab === 'templates') body = diagRenderTemplatesTab();
   else if (subtab === 'input') body = diagRenderInputTab();
   else if (subtab === 'analytics') body = diagRenderAnalyticsTab();
+  else if (subtab === 'calendar') body = diagRenderCalendarTab();
   else body = diagRenderTemplatesTab();
   const tabs = `<div class="subtabs">
     <button class="${subtab==='templates'?'active':''}" onclick="location.hash='diagnostics/templates'">${icon('grid', 14)} Шаблоны</button>
     <button class="${subtab==='input'?'active':''}" onclick="location.hash='diagnostics/input'">${icon('edit', 14)} Ввод результатов</button>
     <button class="${subtab==='analytics'?'active':''}" onclick="location.hash='diagnostics/analytics'">${icon('chart', 14)} Аналитика</button>
+    <button class="${subtab==='calendar'?'active':''}" onclick="location.hash='diagnostics/calendar'">${icon('list', 14)} Календарь</button>
   </div>`;
   page(`
     <h1 style="margin-bottom:16px;color:var(--primary);">${icon('check', 28)} Диагностики с аналитикой</h1>
@@ -4236,6 +5009,223 @@ function diagRenderStudentAnalytics() {
     </div>
   `;
   return { html, data: stats.map(s => ({ topic: s.topic, percent: s.percent, level: s.level, classPercent: classTopicMap[s.topic] || 0 })) };
+}
+
+/* ============================================================
+   КАЛЕНДАРЬ ДИАГНОСТИК
+   ============================================================ */
+function diagRenderCalendarTab() {
+  const templates = DB.getTemplates();
+  const planned = DB.getPlannedDiagnostics();
+  const results = DB.getTaskResults();
+
+  const events = [];
+  planned.forEach(p => {
+    const tpl = templates.find(t => t.id === p.templateId);
+    const cls = DB.getClasses().find(c => c.id === p.classId);
+    events.push({
+      id: 'p' + p.id,
+      kind: 'planned',
+      date: p.plannedDate,
+      title: tpl ? tpl.name : '—',
+      type: tpl ? tpl.type : '—',
+      subject: tpl ? tpl.subject : '',
+      className: cls ? cls.name : '—',
+      status: p.status,
+      notes: p.notes || '',
+      raw: p,
+    });
+  });
+
+  const seen = new Set();
+  results.forEach(r => {
+    const tpl = templates.find(t => t.id === r.templateId);
+    if (!tpl) return;
+    const student = DB.getStudent(r.studentId);
+    if (!student) return;
+    const key = `${r.date}|${r.templateId}|${student.classId}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    const cls = DB.getClasses().find(c => c.id === student.classId);
+    events.push({
+      id: 'r' + r.id,
+      kind: 'past',
+      date: r.date,
+      title: tpl.name,
+      type: tpl.type,
+      subject: tpl.subject,
+      className: cls ? cls.name : '—',
+      status: 'done',
+    });
+  });
+
+  events.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+
+  let filtered = events.slice();
+  if (diagCalendarFilter.month) {
+    filtered = filtered.filter(e => e.date && e.date.slice(0, 7) === diagCalendarFilter.month);
+  }
+  if (diagCalendarFilter.type) {
+    filtered = filtered.filter(e => e.type === diagCalendarFilter.type);
+  }
+
+  const upcoming = filtered.filter(e => e.kind === 'planned');
+  const past = filtered.filter(e => e.kind === 'past');
+  const availableMonths = [...new Set(events.map(e => e.date ? e.date.slice(0, 7) : null).filter(Boolean))].sort();
+
+  const buildRows = (list, kind) => list.map(e => {
+    const cls = kind === 'planned' ? 'badge-blue' : 'badge-green';
+    return `<tr>
+      <td class="nowrap"><b>${esc(fmtDate(e.date))}</b></td>
+      <td><span class="badge ${cls}">${esc(e.type || '—')}</span></td>
+      <td>${esc(e.title)}</td>
+      <td class="nowrap">${esc(e.className)}</td>
+      <td>${esc(e.subject || '—')}</td>
+      <td class="text-right nowrap">
+        ${kind === 'planned' ? `
+          <button class="btn btn-outline btn-sm btn-icon" onclick="openPlannedDiagForm(${e.raw.id})" title="Редактировать">${icon('edit', 12)}</button>
+          <button class="btn btn-danger btn-sm btn-icon" onclick="deletePlannedDiag(${e.raw.id})" title="Удалить">${icon('trash', 12)}</button>
+        ` : `<span class="badge badge-gray">проведена</span>`}
+      </td>
+    </tr>`;
+  }).join('');
+
+  const now = new Date();
+  const curYear = now.getFullYear();
+  const curMonth = now.getMonth();
+  const firstDay = new Date(curYear, curMonth, 1);
+  const lastDay = new Date(curYear, curMonth + 1, 0);
+  const startWeekday = (firstDay.getDay() + 6) % 7;
+  const daysInMonth = lastDay.getDate();
+  const monthEvents = {};
+  events.forEach(e => {
+    if (!e.date) return;
+    const d = new Date(e.date);
+    if (d.getFullYear() === curYear && d.getMonth() === curMonth) {
+      const day = d.getDate();
+      if (!monthEvents[day]) monthEvents[day] = [];
+      monthEvents[day].push(e);
+    }
+  });
+
+  let calendarHtml = '<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-bottom:16px;">';
+  ['Пн','Вт','Ср','Чт','Пт','Сб','Вс'].forEach(d => {
+    calendarHtml += `<div style="text-align:center;font-weight:700;color:var(--primary);padding:6px;font-size:12px;text-transform:uppercase;letter-spacing:.4px;">${d}</div>`;
+  });
+  for (let i = 0; i < startWeekday; i++) calendarHtml += `<div></div>`;
+  for (let day = 1; day <= daysInMonth; day++) {
+    const dayEvents = monthEvents[day] || [];
+    const hasPlanned = dayEvents.some(e => e.kind === 'planned');
+    const hasPast = dayEvents.some(e => e.kind === 'past');
+    const isToday = day === now.getDate();
+    let bg = 'var(--bg-card)';
+    if (hasPlanned) bg = '#fff3e0';
+    if (hasPast) bg = '#e8f5e9';
+    if (hasPlanned && hasPast) bg = '#f3e5f5';
+    calendarHtml += `<div style="background:${bg};border:1px solid var(--border);border-radius:6px;padding:4px;min-height:60px;position:relative;${isToday ? 'outline:2px solid var(--primary);' : ''}">
+      <div style="font-weight:700;font-size:12px;color:var(--text-2);">${day}</div>
+      ${dayEvents.slice(0, 2).map(e => `<div style="font-size:10px;color:${e.kind === 'planned' ? '#bf6a00' : '#1e5e2b'};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(e.title)} · ${esc(e.className)}">• ${esc(e.className)}</div>`).join('')}
+      ${dayEvents.length > 2 ? `<div style="font-size:10px;color:var(--text-muted);">+${dayEvents.length - 2}</div>` : ''}
+    </div>`;
+  }
+  calendarHtml += '</div>';
+
+  const typeOptions = [...new Set(templates.map(t => t.type))].sort();
+
+  return `
+    <div class="card">
+      <div class="row-flex" style="justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px;margin-bottom:16px;">
+        <div>
+          <h2 style="margin:0;">${icon('list', 18)} Календарь диагностик</h2>
+          <div class="muted" style="font-size:12px;margin-top:4px;">
+            Планируемые работы — <span style="background:#fff3e0;padding:1px 6px;border-radius:3px;">голубые</span>, прошедшие — <span style="background:#e8f5e9;padding:1px 6px;border-radius:3px;">зелёные</span>
+          </div>
+        </div>
+        <button class="btn btn-primary btn-sm" onclick="openPlannedDiagForm()">${icon('plus', 14)} Запланировать работу</button>
+      </div>
+
+      <div class="alert alert-info" style="font-size:13px;">${icon('info', 14)} Календарь на текущий месяц. Ниже — список работ с фильтрами.</div>
+
+      ${calendarHtml}
+
+      <div class="form-grid mb-16">
+        <div class="form-group"><label>Месяц</label>
+          <select onchange="diagCalendarFilter.month=this.value;renderDiagnosticsPage('calendar');">
+            <option value="">Все месяцы</option>
+            ${availableMonths.map(m => `<option value="${m}" ${diagCalendarFilter.month === m ? 'selected' : ''}>${esc(m)}</option>`).join('')}
+          </select></div>
+        <div class="form-group"><label>Тип</label>
+          <select onchange="diagCalendarFilter.type=this.value;renderDiagnosticsPage('calendar');">
+            <option value="">Все типы</option>
+            ${typeOptions.map(t => `<option value="${t}" ${diagCalendarFilter.type === t ? 'selected' : ''}>${esc(t)}</option>`).join('')}
+          </select></div>
+      </div>
+
+      ${upcoming.length ? `
+        <h3 style="margin-top:20px;">${icon('alert', 16)} Запланированные (${upcoming.length})</h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Дата</th><th>Тип</th><th>Работа</th><th>Класс</th><th>Предмет</th><th></th></tr></thead>
+          <tbody>${buildRows(upcoming, 'planned')}</tbody></table></div>
+      ` : ''}
+
+      ${past.length ? `
+        <h3 style="margin-top:20px;">${icon('check', 16)} Проведённые (${past.length})</h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Дата</th><th>Тип</th><th>Работа</th><th>Класс</th><th>Предмет</th><th></th></tr></thead>
+          <tbody>${buildRows(past, 'past')}</tbody></table></div>
+      ` : ''}
+
+      ${!upcoming.length && !past.length ? `<div class="empty"><div class="empty-icon">📅</div><div>Нет работ по фильтрам</div></div>` : ''}
+    </div>
+  `;
+}
+
+function openPlannedDiagForm(plannedId) {
+  const templates = DB.getTemplates();
+  const classes = allowedClasses();
+  if (!templates.length) { showToast('Сначала создайте шаблон', 'error'); return; }
+  const p = plannedId ? DB.getPlannedDiagnostics().find(x => x.id === plannedId) : null;
+  showModal(`
+    <h2>${icon('list', 20)} ${p ? 'Редактирование' : 'Планирование'} работы</h2>
+    <div class="form-grid">
+      <div class="form-group"><label>Шаблон *</label>
+        <select id="pd_template">${templates.map(t => `<option value="${t.id}" ${p && p.templateId === t.id ? 'selected' : ''}>${esc(t.name)}</option>`).join('')}</select></div>
+      <div class="form-group"><label>Класс *</label>
+        <select id="pd_class">${classes.map(c => `<option value="${c.id}" ${p && p.classId === c.id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select></div>
+      <div class="form-group"><label>Дата *</label>
+        <input id="pd_date" type="date" value="${esc(p ? p.plannedDate : todayStr())}"></div>
+      <div class="form-group"><label>Заметка</label>
+        <input id="pd_notes" value="${esc(p ? p.notes : '')}" placeholder="Например: 2 урока, каб. 204"></div>
+    </div>
+    <div class="form-actions">
+      <button class="btn btn-primary" onclick="savePlannedDiag(${plannedId || 'null'})">${icon('save', 14)} Сохранить</button>
+      <button class="btn btn-outline" onclick="closeModal()">Отмена</button>
+    </div>
+  `);
+}
+
+function savePlannedDiag(id) {
+  const templateId = +document.getElementById('pd_template').value;
+  const classId = +document.getElementById('pd_class').value;
+  const plannedDate = document.getElementById('pd_date').value;
+  const notes = document.getElementById('pd_notes').value.trim();
+  if (!templateId || !classId || !plannedDate) { showToast('Заполните все поля', 'error'); return; }
+  if (id) {
+    DB.updatePlannedDiagnostic(id, { templateId, classId, plannedDate, notes });
+    showToast('Обновлено', 'success');
+  } else {
+    DB.addPlannedDiagnostic({ templateId, classId, plannedDate, notes, status: 'planned' });
+    showToast('Работа запланирована', 'success');
+  }
+  closeModal();
+  renderDiagnosticsPage('calendar');
+}
+
+function deletePlannedDiag(id) {
+  if (!confirm('Удалить запланированную работу?')) return;
+  DB.deletePlannedDiagnostic(id);
+  showToast('Удалено', 'success');
+  renderDiagnosticsPage('calendar');
 }
 
 /* ============================================================
