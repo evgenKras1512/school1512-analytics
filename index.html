@@ -6282,5 +6282,97 @@ if (SESSION) render();
 
 })();
 </script>
+<script>
+/* ============================================================
+   FIX для модуля «Диагностики» v1.1
+   Перехватывает hashchange раньше всех и принудительно
+   отрисовывает страницу диагностик при #diagnostics/*
+   ============================================================ */
+(function() {
+  'use strict';
+
+  // Функция, которая решает, что рендерить
+  function routeHandler() {
+    const hash = location.hash.replace('#', '') || 'dashboard';
+    const parts = hash.split('/');
+    const route = parts[0];
+    const sub = parts[1] || 'templates';
+
+    if (route === 'diagnostics') {
+      // Проверяем, что модуль диагностик загружен
+      if (typeof window.renderDiagnosticsPage === 'function') {
+        try {
+          window.renderDiagnosticsPage(sub);
+        } catch (e) {
+          console.error('[FIX diagnostics]', e);
+          alert('Ошибка при открытии раздела «Диагностики»: ' + e.message);
+        }
+        return;
+      } else {
+        console.warn('[FIX diagnostics] renderDiagnosticsPage не найден');
+      }
+    }
+
+    // Для всех остальных маршрутов — вызываем стандартный render()
+    // Находим «настоящий» render через window
+    if (typeof window.__originalRender === 'function') {
+      window.__originalRender();
+    } else if (typeof render === 'function') {
+      render();
+    }
+  }
+
+  // Сохраняем текущий render как «оригинальный» один раз
+  if (!window.__originalRender && typeof window.render === 'function') {
+    window.__originalRender = window.render;
+  }
+
+  // Перехватываем hashchange в capture-фазе (срабатывает раньше всех)
+  window.addEventListener('hashchange', function(e) {
+    // Небольшая задержка, чтобы другие слушатели успели отработать,
+    // затем принудительно вызываем наш роутер
+    setTimeout(routeHandler, 10);
+  }, true);
+
+  // Также перехватываем popstate (для совместимости)
+  window.addEventListener('popstate', function() {
+    setTimeout(routeHandler, 10);
+  }, true);
+
+  // Обрабатываем клики по ссылкам с диагностикой
+  document.addEventListener('click', function(e) {
+    const target = e.target.closest('[onclick*="diagnostics"], [onclick*="diagGo"]');
+    if (!target) return;
+    // Через 50 мс после клика — принудительно рендерим
+    setTimeout(function() {
+      const hash = location.hash.replace('#', '');
+      if (hash.startsWith('diagnostics')) {
+        routeHandler();
+      }
+    }, 50);
+  }, true);
+
+  // После загрузки страницы — если мы на #diagnostics, сразу рендерим
+  window.addEventListener('load', function() {
+    setTimeout(function() {
+      const hash = location.hash.replace('#', '');
+      if (hash.startsWith('diagnostics')) {
+        routeHandler();
+      }
+    }, 300);
+  });
+
+  // Немедленно — если хэш уже #diagnostics
+  setTimeout(function() {
+    const hash = location.hash.replace('#', '');
+    if (hash.startsWith('diagnostics')) {
+      routeHandler();
+    }
+  }, 500);
+
+  console.log('[FIX diagnostics] Перехватчик установлен');
+
+})();
+</script>
 </body>
 </html>
