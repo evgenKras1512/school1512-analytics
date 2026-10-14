@@ -409,6 +409,69 @@ const DB = {
     if (!this._data.taskResults) this._data.taskResults = [];
     if (!this._data.nextIds.templateId) this._data.nextIds.templateId = 1;
     if (!this._data.nextIds.taskResultId) this._data.nextIds.taskResultId = 1;
+        // Если у пользователя старая БД без шаблонов — добавим демо-шаблоны и результаты
+    if (!this._data.diagnosticTemplates || this._data.diagnosticTemplates.length === 0) {
+      const demo = DB._seedDemoDiagnostics(this._data);
+      this._data.diagnosticTemplates = demo.templates;
+      this._data.taskResults = demo.results;
+      this._data.nextIds.templateId = demo.nextTemplateId;
+      this._data.nextIds.taskResultId = demo.nextResultId;
+    }
+  },
+    _seedDemoDiagnostics() {
+    const templates = [
+      { id:1, name:'ВПР Математика 5 класс', type:'ВПР', subject:'Математика', classLevel:'5', tasks:[
+        {num:1, topic:'Натуральные числа'}, {num:2, topic:'Обыкновенные дроби'},
+        {num:3, topic:'Десятичные дроби'}, {num:4, topic:'Проценты'},
+        {num:5, topic:'Текстовые задачи'}, {num:6, topic:'Геометрические фигуры'},
+        {num:7, topic:'Уравнения'}, {num:8, topic:'Работа с диаграммами'}
+      ]},
+      { id:2, name:'ВПР Математика 6 класс', type:'ВПР', subject:'Математика', classLevel:'6', tasks:[
+        {num:1, topic:'Действия с рациональными числами'}, {num:2, topic:'Пропорции'},
+        {num:3, topic:'Проценты'}, {num:4, topic:'Уравнения'},
+        {num:5, topic:'Текстовые задачи'}, {num:6, topic:'Геометрические фигуры'},
+        {num:7, topic:'Координатная плоскость'}, {num:8, topic:'Вероятность и статистика'}
+      ]},
+      { id:3, name:'ВПР Русский язык 5 класс', type:'ВПР', subject:'Русский язык', classLevel:'5', tasks:[
+        {num:1, topic:'Фонетика'}, {num:2, topic:'Морфемика'},
+        {num:3, topic:'Морфология'}, {num:4, topic:'Синтаксис'},
+        {num:5, topic:'Орфография'}, {num:6, topic:'Пунктуация'},
+        {num:7, topic:'Работа с текстом'}, {num:8, topic:'Лексика'}
+      ]},
+      { id:4, name:'ВПР Русский язык 6 класс', type:'ВПР', subject:'Русский язык', classLevel:'6', tasks:[
+        {num:1, topic:'Фонетика'}, {num:2, topic:'Морфемика'},
+        {num:3, topic:'Морфология'}, {num:4, topic:'Синтаксис'},
+        {num:5, topic:'Орфография'}, {num:6, topic:'Пунктуация'},
+        {num:7, topic:'Работа с текстом'}, {num:8, topic:'Лексика'}
+      ]},
+      { id:5, name:'МЦКО Читательская грамотность 7 класс', type:'МЦКО', subject:'Метапредметная', classLevel:'7', tasks:[
+        {num:1, topic:'Поиск информации'}, {num:2, topic:'Поиск информации'},
+        {num:3, topic:'Интерпретация'}, {num:4, topic:'Интерпретация'},
+        {num:5, topic:'Осмысление'}, {num:6, topic:'Осмысление'},
+        {num:7, topic:'Работа с текстами'}, {num:8, topic:'Работа с текстами'}
+      ]},
+    ];
+    const results = [];
+    let trId = 1;
+    const push = (sid, tplId, date, scores) => results.push({ id: trId++, studentId: sid, templateId: tplId, date, scores });
+    push(1, 1, '2023-10-15', {1:1,2:1,3:0,4:1,5:1,6:0,7:1,8:1});
+    push(1, 2, '2024-10-20', {1:1,2:1,3:1,4:1,5:0,6:1,7:1,8:1});
+    push(2, 3, '2023-10-17', {1:1,2:1,3:1,4:1,5:1,6:1,7:1,8:1});
+    push(2, 4, '2024-10-18', {1:1,2:1,3:1,4:0,5:1,6:0,7:1,8:0});
+    push(3, 1, '2023-10-15', {1:1,2:0,3:1,4:0,5:1,6:1,7:0,8:1});
+    push(3, 2, '2024-10-20', {1:1,2:1,3:0,4:0,5:1,6:1,7:1,8:0});
+    push(4, 3, '2023-10-17', {1:1,2:0,3:0,4:1,5:0,6:1,7:0,8:1});
+    push(4, 4, '2024-10-18', {1:1,2:1,3:1,4:1,5:0,6:1,7:1,8:0});
+    push(5, 1, '2023-10-15', {1:1,2:0,3:0,4:0,5:0,6:1,7:0,8:0});
+    push(5, 2, '2024-10-20', {1:0,2:0,3:1,4:0,5:0,6:1,7:0,8:0});
+    push(6, 1, '2023-10-15', {1:1,2:1,3:1,4:1,5:0,6:1,7:1,8:0});
+    push(6, 2, '2024-10-20', {1:1,2:1,3:1,4:1,5:1,6:1,7:1,8:0});
+    push(7, 3, '2023-10-17', {1:1,2:1,3:0,4:0,5:1,6:1,7:0,8:1});
+    push(7, 4, '2024-10-18', {1:1,2:0,3:1,4:0,5:1,6:0,7:1,8:1});
+    push(8, 5, '2024-11-10', {1:1,2:1,3:0,4:1,5:1,6:0,7:0,8:1});
+    push(9, 5, '2024-11-10', {1:0,2:0,3:0,4:1,5:0,6:0,7:1,8:0});
+    push(10, 5, '2024-11-10', {1:1,2:0,3:0,4:0,5:0,6:0,7:0,8:1});
+    return { templates, results, nextTemplateId: 6, nextResultId: trId };
   },
   save() { localStorage.setItem(this._key, JSON.stringify(this._data)); },
   reset() { localStorage.removeItem(this._key); this._data = null; },
@@ -425,6 +488,97 @@ const DB = {
       { id:102, name:'Сидоров Игорь Николаевич' },
       { id:103, name:'Кузнецова Ольга Владимировна' }
     ];
+        // ─── Демо-шаблоны диагностик ───
+    const diagnosticTemplates = [
+      { id:1, name:'ВПР Математика 5 класс', type:'ВПР', subject:'Математика', classLevel:'5', tasks:[
+        {num:1, topic:'Натуральные числа'}, {num:2, topic:'Обыкновенные дроби'},
+        {num:3, topic:'Десятичные дроби'}, {num:4, topic:'Проценты'},
+        {num:5, topic:'Текстовые задачи'}, {num:6, topic:'Геометрические фигуры'},
+        {num:7, topic:'Уравнения'}, {num:8, topic:'Работа с диаграммами'}
+      ]},
+      { id:2, name:'ВПР Математика 6 класс', type:'ВПР', subject:'Математика', classLevel:'6', tasks:[
+        {num:1, topic:'Действия с рациональными числами'}, {num:2, topic:'Пропорции'},
+        {num:3, topic:'Проценты'}, {num:4, topic:'Уравнения'},
+        {num:5, topic:'Текстовые задачи'}, {num:6, topic:'Геометрические фигуры'},
+        {num:7, topic:'Координатная плоскость'}, {num:8, topic:'Вероятность и статистика'}
+      ]},
+      { id:3, name:'ВПР Русский язык 5 класс', type:'ВПР', subject:'Русский язык', classLevel:'5', tasks:[
+        {num:1, topic:'Фонетика'}, {num:2, topic:'Морфемика'},
+        {num:3, topic:'Морфология'}, {num:4, topic:'Синтаксис'},
+        {num:5, topic:'Орфография'}, {num:6, topic:'Пунктуация'},
+        {num:7, topic:'Работа с текстом'}, {num:8, topic:'Лексика'}
+      ]},
+      { id:4, name:'ВПР Русский язык 6 класс', type:'ВПР', subject:'Русский язык', classLevel:'6', tasks:[
+        {num:1, topic:'Фонетика'}, {num:2, topic:'Морфемика'},
+        {num:3, topic:'Морфология'}, {num:4, topic:'Синтаксис'},
+        {num:5, topic:'Орфография'}, {num:6, topic:'Пунктуация'},
+        {num:7, topic:'Работа с текстом'}, {num:8, topic:'Лексика'}
+      ]},
+      { id:5, name:'МЦКО Читательская грамотность 7 класс', type:'МЦКО', subject:'Метапредметная', classLevel:'7', tasks:[
+        {num:1, topic:'Поиск информации'}, {num:2, topic:'Поиск информации'},
+        {num:3, topic:'Интерпретация'}, {num:4, topic:'Интерпретация'},
+        {num:5, topic:'Осмысление'}, {num:6, topic:'Осмысление'},
+        {num:7, topic:'Работа с текстами'}, {num:8, topic:'Работа с текстами'}
+      ]},
+    ];
+
+    // ─── Демо-результаты диагностик (3 года, тот же ученик) ───
+    const taskResults = [];
+    let trId = 1;
+
+    // Ученик 1 (Алексеев, 5А) — математика 5 → 6 класс, растёт
+    taskResults.push({ id:trId++, studentId:1, templateId:1, date:'2023-10-15',
+      scores:{1:1,2:1,3:0,4:1,5:1,6:0,7:1,8:1} }); // 6/8 = 75%
+    taskResults.push({ id:trId++, studentId:1, templateId:2, date:'2024-10-20',
+      scores:{1:1,2:1,3:1,4:1,5:0,6:1,7:1,8:1} }); // 7/8 = 88%
+
+    // Ученик 2 (Борисова, 5А) — русский 5 → 6 класс, падает
+    taskResults.push({ id:trId++, studentId:2, templateId:3, date:'2023-10-17',
+      scores:{1:1,2:1,3:1,4:1,5:1,6:1,7:1,8:1} }); // 8/8 = 100%
+    taskResults.push({ id:trId++, studentId:2, templateId:4, date:'2024-10-18',
+      scores:{1:1,2:1,3:1,4:0,5:1,6:0,7:1,8:0} }); // 5/8 = 63%
+
+    // Ученик 3 (Волков, 5А) — математика стабильно средне
+    taskResults.push({ id:trId++, studentId:3, templateId:1, date:'2023-10-15',
+      scores:{1:1,2:0,3:1,4:0,5:1,6:1,7:0,8:1} }); // 5/8 = 63%
+    taskResults.push({ id:trId++, studentId:3, templateId:2, date:'2024-10-20',
+      scores:{1:1,2:1,3:0,4:0,5:1,6:1,7:1,8:0} }); // 5/8 = 63%
+
+    // Ученик 4 (Григорьева, 5А) — русский растёт
+    taskResults.push({ id:trId++, studentId:4, templateId:3, date:'2023-10-17',
+      scores:{1:1,2:0,3:0,4:1,5:0,6:1,7:0,8:1} }); // 4/8 = 50%
+    taskResults.push({ id:trId++, studentId:4, templateId:4, date:'2024-10-18',
+      scores:{1:1,2:1,3:1,4:1,5:0,6:1,7:1,8:0} }); // 6/8 = 75%
+
+    // Ученик 5 (Дмитриев, 5Б) — слабо по математике
+    taskResults.push({ id:trId++, studentId:5, templateId:1, date:'2023-10-15',
+      scores:{1:1,2:0,3:0,4:0,5:0,6:1,7:0,8:0} }); // 2/8 = 25%
+    taskResults.push({ id:trId++, studentId:5, templateId:2, date:'2024-10-20',
+      scores:{1:0,2:0,3:1,4:0,5:0,6:1,7:0,8:0} }); // 2/8 = 25%
+
+    // Ученик 6 (Егорова, 5Б) — сильно по математике
+    taskResults.push({ id:trId++, studentId:6, templateId:1, date:'2023-10-15',
+      scores:{1:1,2:1,3:1,4:1,5:0,6:1,7:1,8:0} }); // 6/8 = 75%
+    taskResults.push({ id:trId++, studentId:6, templateId:2, date:'2024-10-20',
+      scores:{1:1,2:1,3:1,4:1,5:1,6:1,7:1,8:0} }); // 7/8 = 88%
+
+    // Ученик 7 (Жуков, 9А) — русский средний
+    taskResults.push({ id:trId++, studentId:7, templateId:3, date:'2023-10-17',
+      scores:{1:1,2:1,3:0,4:0,5:1,6:1,7:0,8:1} }); // 5/8 = 63%
+    taskResults.push({ id:trId++, studentId:7, templateId:4, date:'2024-10-18',
+      scores:{1:1,2:0,3:1,4:0,5:1,6:0,7:1,8:1} }); // 5/8 = 63%
+
+    // Ученик 8 (Зайцева, 9А) — метапредмет (только 1 год)
+    taskResults.push({ id:trId++, studentId:8, templateId:5, date:'2024-11-10',
+      scores:{1:1,2:1,3:0,4:1,5:1,6:0,7:0,8:1} }); // 5/8 = 63%
+
+    // Ещё несколько для массы в карте проблем
+    taskResults.push({ id:trId++, studentId:9, templateId:5, date:'2024-11-10',
+      scores:{1:0,2:0,3:0,4:1,5:0,6:0,7:1,8:0} }); // 2/8 = 25% — слабо
+    taskResults.push({ id:trId++, studentId:10, templateId:5, date:'2024-11-10',
+      scores:{1:1,2:0,3:0,4:0,5:0,6:0,7:0,8:1} }); // 2/8 = 25% — слабо
+
+    const diagnosticTemplatesNextIds = { templateId: 6, taskResultId: trId };
     const subjectTeachersList = [
       { id:1, name:'Смирнова Елена Владимировна', mckoLevel:'экспертный', mckoDate:'2024-11-15', notes:[{id:1,date:'2024-12-01',author:'Иванова М.П.',text:'Отличная подготовка к ВПР.'}] },
       { id:2, name:'Морозов Андрей Петрович', mckoLevel:'высокий', mckoDate:'2024-10-20', notes:[] },
@@ -480,6 +634,60 @@ const DB = {
       { id:5, studentId:7, title:'Пробный ОГЭ (рус.)', type:'ОГЭ', subject:'Русский язык', date:'2025-01-20', result:'3', score:3, maxScore:5, level:'базовый', comment:'' },
       { id:6, studentId:3, title:'Психологическая', type:'психологическая', subject:'', date:'2024-09-25', result:'OK', score:null, maxScore:null, level:'', comment:'Адаптация' }
     ];
+        const diagnosticTemplates = [
+      { id:1, name:'ВПР Математика 5 класс', type:'ВПР', subject:'Математика', classLevel:'5', tasks:[
+        {num:1, topic:'Натуральные числа'}, {num:2, topic:'Обыкновенные дроби'},
+        {num:3, topic:'Десятичные дроби'}, {num:4, topic:'Проценты'},
+        {num:5, topic:'Текстовые задачи'}, {num:6, topic:'Геометрические фигуры'},
+        {num:7, topic:'Уравнения'}, {num:8, topic:'Работа с диаграммами'}
+      ]},
+      { id:2, name:'ВПР Математика 6 класс', type:'ВПР', subject:'Математика', classLevel:'6', tasks:[
+        {num:1, topic:'Действия с рациональными числами'}, {num:2, topic:'Пропорции'},
+        {num:3, topic:'Проценты'}, {num:4, topic:'Уравнения'},
+        {num:5, topic:'Текстовые задачи'}, {num:6, topic:'Геометрические фигуры'},
+        {num:7, topic:'Координатная плоскость'}, {num:8, topic:'Вероятность и статистика'}
+      ]},
+      { id:3, name:'ВПР Русский язык 5 класс', type:'ВПР', subject:'Русский язык', classLevel:'5', tasks:[
+        {num:1, topic:'Фонетика'}, {num:2, topic:'Морфемика'},
+        {num:3, topic:'Морфология'}, {num:4, topic:'Синтаксис'},
+        {num:5, topic:'Орфография'}, {num:6, topic:'Пунктуация'},
+        {num:7, topic:'Работа с текстом'}, {num:8, topic:'Лексика'}
+      ]},
+      { id:4, name:'ВПР Русский язык 6 класс', type:'ВПР', subject:'Русский язык', classLevel:'6', tasks:[
+        {num:1, topic:'Фонетика'}, {num:2, topic:'Морфемика'},
+        {num:3, topic:'Морфология'}, {num:4, topic:'Синтаксис'},
+        {num:5, topic:'Орфография'}, {num:6, topic:'Пунктуация'},
+        {num:7, topic:'Работа с текстом'}, {num:8, topic:'Лексика'}
+      ]},
+      { id:5, name:'МЦКО Читательская грамотность 7 класс', type:'МЦКО', subject:'Метапредметная', classLevel:'7', tasks:[
+        {num:1, topic:'Поиск информации'}, {num:2, topic:'Поиск информации'},
+        {num:3, topic:'Интерпретация'}, {num:4, topic:'Интерпретация'},
+        {num:5, topic:'Осмысление'}, {num:6, topic:'Осмысление'},
+        {num:7, topic:'Работа с текстами'}, {num:8, topic:'Работа с текстами'}
+      ]},
+    ];
+
+    const taskResults = [];
+    let trId = 1;
+    const push = (sid, tplId, date, scores) => taskResults.push({ id: trId++, studentId: sid, templateId: tplId, date, scores });
+    push(1, 1, '2023-10-15', {1:1,2:1,3:0,4:1,5:1,6:0,7:1,8:1});
+    push(1, 2, '2024-10-20', {1:1,2:1,3:1,4:1,5:0,6:1,7:1,8:1});
+    push(2, 3, '2023-10-17', {1:1,2:1,3:1,4:1,5:1,6:1,7:1,8:1});
+    push(2, 4, '2024-10-18', {1:1,2:1,3:1,4:0,5:1,6:0,7:1,8:0});
+    push(3, 1, '2023-10-15', {1:1,2:0,3:1,4:0,5:1,6:1,7:0,8:1});
+    push(3, 2, '2024-10-20', {1:1,2:1,3:0,4:0,5:1,6:1,7:1,8:0});
+    push(4, 3, '2023-10-17', {1:1,2:0,3:0,4:1,5:0,6:1,7:0,8:1});
+    push(4, 4, '2024-10-18', {1:1,2:1,3:1,4:1,5:0,6:1,7:1,8:0});
+    push(5, 1, '2023-10-15', {1:1,2:0,3:0,4:0,5:0,6:1,7:0,8:0});
+    push(5, 2, '2024-10-20', {1:0,2:0,3:1,4:0,5:0,6:1,7:0,8:0});
+    push(6, 1, '2023-10-15', {1:1,2:1,3:1,4:1,5:0,6:1,7:1,8:0});
+    push(6, 2, '2024-10-20', {1:1,2:1,3:1,4:1,5:1,6:1,7:1,8:0});
+    push(7, 3, '2023-10-17', {1:1,2:1,3:0,4:0,5:1,6:1,7:0,8:1});
+    push(7, 4, '2024-10-18', {1:1,2:0,3:1,4:0,5:1,6:0,7:1,8:1});
+    push(8, 5, '2024-11-10', {1:1,2:1,3:0,4:1,5:1,6:0,7:0,8:1});
+    push(9, 5, '2024-11-10', {1:0,2:0,3:0,4:1,5:0,6:0,7:1,8:0});
+    push(10, 5, '2024-11-10', {1:1,2:0,3:0,4:0,5:0,6:0,7:0,8:1});
+
     const subjectTeachers = [
       { id:1, classId:1, subject:'Русский язык', teacherId:1 },
       { id:2, classId:1, subject:'Математика', teacherId:2 },
@@ -494,9 +702,9 @@ const DB = {
     return { users, teachers, subjectTeachersList, buildings, classes, students, subjects, grades, diagnostics, subjectTeachers,
              gradesHistory: [], dashboardWidgets: ['stats','classesTable','classesChart'],
              autoReports: { email:'', enabled:false, schedule:'weekly', lastSent:null },
-             diagnosticTemplates: [], taskResults: [],
+             diagnosticTemplates, taskResults,
              nextIds: { student:11, grade:gid, diagnostic:7, class:5, teacher:104, building:4, user:5,
-                        subjectTeacher:10, subjectTeacherList:6, noteId:2, templateId:1, taskResultId:1 } };
+                        subjectTeacher:10, subjectTeacherList:6, noteId:2, templateId:6, taskResultId:trId } };
   },
   nextId(e) { const d = this.load(); const id = d.nextIds[e]; d.nextIds[e]++; this.save(); return id; },
 
@@ -3124,11 +3332,12 @@ function doExportArchive() {
 /* ============================================================
    АНАЛИТИКА
    ============================================================ */
-let analyticsFilter = { classId:'', subject:'', period:'', tab: 'main', ratingMcko: '' };
+let analyticsFilter = { classId:'', subject:'', period:'', tab: 'main', ratingMcko: '', parallel: '' };
 function renderAnalytics() {
   const tabs = `
     <div class="subtabs">
       <button class="${analyticsFilter.tab==='main'?'active':''}" onclick="analyticsFilter.tab='main';renderAnalytics();">${icon('chart', 14)} Общая</button>
+      <button class="${analyticsFilter.tab==='parallels'?'active':''}" onclick="analyticsFilter.tab='parallels';renderAnalytics();">${icon('users', 14)} Параллели</button>
       <button class="${analyticsFilter.tab==='heatmap'?'active':''}" onclick="analyticsFilter.tab='heatmap';renderAnalytics();">${icon('grid', 14)} Тепловая карта</button>
       <button class="${analyticsFilter.tab==='risks'?'active':''}" onclick="analyticsFilter.tab='risks';renderAnalytics();">${icon('alert', 14)} Риски</button>
       <button class="${analyticsFilter.tab==='teachers'?'active':''}" onclick="analyticsFilter.tab='teachers';renderAnalytics();">${icon('user', 14)} Учителя</button>
@@ -3136,7 +3345,254 @@ function renderAnalytics() {
   if (analyticsFilter.tab === 'heatmap') return renderAnalyticsHeatmap(tabs);
   if (analyticsFilter.tab === 'risks') return renderAnalyticsRisks(tabs);
   if (analyticsFilter.tab === 'teachers') return renderAnalyticsTeachers(tabs);
+  if (analyticsFilter.tab === 'parallels') return renderAnalyticsParallels(tabs);
   return renderAnalyticsMain(tabs);
+}
+/* ============================================================
+   ДИНАМИКА ПО ПАРАЛЛЕЛЯМ
+   ============================================================ */
+
+// Извлекает номер параллели из имени класса: "5А" → "5", "10Б" → "10"
+function getParallelOf(className) {
+  const m = String(className || '').match(/^(\d+)/);
+  return m ? m[1] : null;
+}
+
+// Группирует классы по параллелям
+function groupClassesByParallel(classes) {
+  const groups = {};
+  classes.forEach(c => {
+    const p = getParallelOf(c.name);
+    if (!p) return;
+    if (!groups[p]) groups[p] = [];
+    groups[p].push(c);
+  });
+  // сортировка классов внутри параллели по имени
+  Object.values(groups).forEach(arr => arr.sort((a, b) => a.name.localeCompare(b.name, 'ru')));
+  return groups;
+}
+
+// Средний балл класса по предмету
+function classSubjectAvg(classId, subject, students) {
+  const sts = students.filter(s => s.classId === classId);
+  let sum = 0, cnt = 0;
+  sts.forEach(s => {
+    DB.getGrades()
+      .filter(g => g.studentId === s.id && g.subject === subject && /^[2-5]$/.test(g.value))
+      .forEach(g => { sum += +g.value; cnt++; });
+  });
+  return cnt ? +(sum / cnt).toFixed(2) : null;
+}
+
+// Качество знаний класса по предмету (% оценок 4 и 5)
+function classSubjectQuality(classId, subject, students) {
+  const sts = students.filter(s => s.classId === classId);
+  let quality = 0, cnt = 0;
+  sts.forEach(s => {
+    DB.getGrades()
+      .filter(g => g.studentId === s.id && g.subject === subject && /^[2-5]$/.test(g.value))
+      .forEach(g => { cnt++; if (+g.value >= 4) quality++; });
+  });
+  return cnt ? Math.round(quality / cnt * 100) : null;
+}
+
+// Основная функция: собирает полную статистику по параллели
+function parallelStats(parallel, classes, students, subjects) {
+  const parallelClasses = classes.filter(c => getParallelOf(c.name) === parallel);
+  const rows = []; // { subject, byClass: { classId: { avg, quality, count } }, leader, laggard }
+  subjects.forEach(subject => {
+    const byClass = {};
+    let bestId = null, bestAvg = -1;
+    let worstId = null, worstAvg = 99;
+    parallelClasses.forEach(c => {
+      const avg = classSubjectAvg(c.id, subject, students);
+      const quality = classSubjectQuality(c.id, subject, students);
+      byClass[c.id] = { avg, quality, className: c.name };
+      if (avg !== null) {
+        if (avg > bestAvg) { bestAvg = avg; bestId = c.id; }
+        if (avg < worstAvg) { worstAvg = avg; worstId = c.id; }
+      }
+    });
+    rows.push({
+      subject,
+      byClass,
+      leaderId: bestId,
+      leaderAvg: bestAvg > -1 ? bestAvg : null,
+      laggardId: worstId,
+      laggardAvg: worstAvg < 99 ? worstAvg : null,
+    });
+  });
+  // добавим флаг "есть ли данные"
+  const hasData = rows.some(r => Object.values(r.byClass).some(x => x.avg !== null));
+  return { parallel, classes: parallelClasses, rows, hasData };
+}
+
+function renderAnalyticsParallels(tabs) {
+  const allClasses = allowedClasses();
+  const students = allowedStudents();
+  const subjects = usedSubjects();
+  const groups = groupClassesByParallel(allClasses);
+  const parallels = Object.keys(groups).sort((a, b) => +a - +b);
+
+  // Доступные параллели (только те, где ≥2 класса, иначе нет смысла сравнивать)
+  const comparableParallels = parallels.filter(p => groups[p].length >= 2);
+
+  if (!comparableParallels.length) {
+    page(`
+      <h1 style="margin-bottom:16px;color:var(--primary);">Аналитика</h1>
+      ${tabs}
+      <div class="card"><div class="empty">
+        <div class="empty-icon">🏫</div>
+        <div>Нет параллелей с двумя и более классами</div>
+        <div class="muted">Например, «5А» и «5Б» — одна параллель. Добавьте классы с одинаковым номером.</div>
+      </div></div>
+    `, 'analytics');
+    return;
+  }
+
+  // Выбранная параллель
+  const selected = analyticsFilter.parallel && comparableParallels.includes(analyticsFilter.parallel)
+    ? analyticsFilter.parallel
+    : comparableParallels[0];
+  analyticsFilter.parallel = selected;
+
+  const stats = parallelStats(selected, allClasses, students, subjects);
+
+  // Карточки параллелей для быстрого переключения
+  const parallelTabs = comparableParallels.map(p => {
+    const isActive = p === selected;
+    return `<button class="btn ${isActive ? 'btn-primary' : 'btn-outline'} btn-sm" onclick="analyticsFilter.parallel='${p}';renderAnalytics();">
+      ${esc(p)} класс <span class="muted" style="color:${isActive ? '#fff' : 'inherit'};">(${groups[p].length})</span>
+    </button>`;
+  }).join('');
+
+  // Таблица: строки — предметы, столбцы — классы
+  const headerCells = stats.classes.map(c => `<th class="nowrap" style="text-align:center;">${esc(c.name)}</th>`).join('');
+  const tableRows = stats.rows.map(r => {
+    const cells = stats.classes.map(c => {
+      const cell = r.byClass[c.id];
+      if (!cell || cell.avg === null) return `<td style="text-align:center;">—</td>`;
+      const isLeader = r.leaderId === c.id && r.leaderId !== r.laggardId;
+      const isLaggard = r.laggardId === c.id && r.leaderId !== r.laggardId;
+      const bg = isLeader ? 'background:#c6f6d5;color:#22543d;font-weight:700;'
+              : isLaggard ? 'background:#fed7d7;color:#742a2a;font-weight:700;'
+              : '';
+      const icon = isLeader ? ' 🏆' : isLaggard ? ' ⚠' : '';
+      return `<td style="text-align:center;${bg}" title="Качество: ${cell.quality ?? '—'}%">
+        ${cell.avg}${icon}
+      </td>`;
+    }).join('');
+    return `<tr>
+      <td><b>${esc(r.subject)}</b></td>
+      ${cells}
+    </tr>`;
+  }).join('');
+
+  // Лидеры и отстающие — по предметам
+  const comparisonCards = stats.rows
+    .filter(r => r.leaderId && r.laggardId && r.leaderId !== r.laggardId)
+    .map(r => {
+      const leader = r.byClass[r.leaderId];
+      const laggard = r.byClass[r.laggardId];
+      const diff = (r.leaderAvg - r.laggardAvg).toFixed(2);
+      return `<tr>
+        <td><b>${esc(r.subject)}</b></td>
+        <td><span class="badge badge-green">🏆 ${esc(leader.className)}</span> ${leader.avg}</td>
+        <td><span class="badge badge-red">⚠ ${esc(laggard.className)}</span> ${laggard.avg}</td>
+        <td class="text-right"><b style="color:var(--primary);">+${diff}</b></td>
+      </tr>`;
+    }).join('');
+
+  // Данные для графика: X — предметы, серии — классы
+  const chartLabels = stats.rows.map(r => r.subject);
+  const chartSeries = stats.classes.map((c, idx) => {
+    const colors = ['#04558a', '#38a169', '#dd6b20', '#805ad5', '#c53030', '#1893d2', '#6b46c1'];
+    return {
+      name: c.name,
+      color: colors[idx % colors.length],
+      data: stats.rows.map(r => r.byClass[c.id]?.avg ?? null),
+    };
+  });
+  window._parallelsChartData = { labels: chartLabels, series: chartSeries, parallel: selected };
+
+  page(`
+    <h1 style="margin-bottom:16px;color:var(--primary);">Аналитика · Параллели</h1>
+    ${tabs}
+
+    <div class="card">
+      <div class="row-flex" style="justify-content:space-between;flex-wrap:wrap;gap:10px;">
+        <h2 style="margin:0;">${icon('users', 18)} Параллель</h2>
+        <div class="btn-group">${parallelTabs}</div>
+      </div>
+    </div>
+
+    ${!stats.hasData ? `<div class="card"><div class="empty"><div class="empty-icon">📊</div>
+      <div>Пока нет оценок по предметам у классов этой параллели</div></div></div>` : `
+
+    <div class="card">
+      <h2>${icon('bar-chart', 18)} Средний балл по предметам</h2>
+      <div class="alert alert-info" style="font-size:13px;">${icon('info', 14)} 🏆 — лучший класс параллели по предмету, ⚠ — отстающий. Наведите на ячейку — покажет качество знаний.</div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Предмет</th>${headerCells}</tr></thead>
+          <tbody>${tableRows}</tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>${icon('chart', 18)} Сравнение классов параллели ${esc(selected)}</h2>
+      <div class="chart-box-lg" style="position:relative;height:420px;"><canvas id="parallelsChart"></canvas></div>
+    </div>
+
+    ${comparisonCards ? `<div class="card">
+      <h2>${icon('award', 18)} Лидеры и отстающие</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Предмет</th><th>Лидер</th><th>Отстающий</th><th class="text-right">Разрыв</th></tr></thead>
+          <tbody>${comparisonCards}</tbody>
+        </table>
+      </div>
+    </div>` : ''}
+
+    `}
+  `, 'analytics');
+
+  // Рисуем график
+  setTimeout(() => {
+    const ctx = document.getElementById('parallelsChart');
+    if (!ctx || !window._parallelsChartData) return;
+    const d = window._parallelsChartData;
+    if (window._parallelsChart) { try { window._parallelsChart.destroy(); } catch(e) {} }
+    const t = chartTheme();
+    window._parallelsChart = new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels: d.labels,
+        datasets: d.series.map(s => ({
+          label: s.name,
+          data: s.data,
+          backgroundColor: s.color,
+          borderRadius: 6,
+        })),
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: {
+          legend: { labels: { font: t.font, color: t.text } },
+          tooltip: {
+            callbacks: {
+              label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y ?? '—'}`,
+            },
+          },
+        },
+        scales: {
+          y: { min: 0, max: 5, ticks: { stepSize: 0.5, font: t.font, color: t.text }, grid: { color: t.grid } },
+          x: { ticks: { font: t.font, color: t.text, maxRotation: 45 }, grid: { display: false } },
+        },
+      },
+    });
+  }, 150);
 }
 function renderAnalyticsMain(tabs) {
   const classes = allowedClasses();
