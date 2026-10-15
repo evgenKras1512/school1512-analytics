@@ -243,7 +243,6 @@ html[data-theme="dark"] .diag-cell-fail{background:rgba(229,62,62,.25);color:#fc
     <button class="btn btn-primary btn-sm" onclick="installPwa()">Установить</button>
   </div>
 </div>
-
 <script>
 /* ============================================================
    ШКОЛЬНАЯ АНАЛИТИКА — единый скрипт с разбиением по документам
@@ -412,17 +411,15 @@ try {
     .then(() => {
       firebaseAuthReady = true;
       console.log('[Firebase] Анонимный вход выполнен');
-      setTimeout(() => {
-        if (typeof DB !== 'undefined') {
-          DB.migrateCloudToSplit().then(() => DB.syncFromCloud());
-        }
-      }, 500);
+      // ✅ ИЗМЕНЕНИЕ: убрали дублирующий вызов миграции.
+      // Синхронизация запустится ОДИН РАЗ в самом конце файла (setTimeout 1500).
     })
     .catch(err => console.warn('[Firebase] Ошибка анонимного входа:', err));
 } catch (err) {
   console.warn('[Firebase] Не удалось инициализировать:', err);
   firebaseReady = false;
 }
+
 /* ============================================================
    БАЗА ДАННЫХ
    ============================================================ */
@@ -496,14 +493,14 @@ const DB = {
       updatedAt: now,
     });
 
-    // config
+    // ✅ ИЗМЕНЕНИЕ: config — снапшоты НЕ отправляем в облако
     batch.set(firestore.collection('schools').doc('config'), {
       autoReports: d.autoReports || {},
       dashboardWidgets: d.dashboardWidgets || [],
       plannedDiagnostics: d.plannedDiagnostics || [],
       classTransitions: d.classTransitions || [],
       gradesHistory: d.gradesHistory || [],
-      snapshots: (d.snapshots || []).slice(0, 3),
+      // снапшоты в облако НЕ отправляем — они только в localStorage
       updatedAt: now,
     });
 
@@ -581,7 +578,7 @@ const DB = {
           result.plannedDiagnostics = data.plannedDiagnostics || [];
           result.classTransitions = data.classTransitions || [];
           result.gradesHistory = data.gradesHistory || [];
-          result.snapshots = data.snapshots || [];
+          // ✅ ИЗМЕНЕНИЕ: снапшоты не читаем из облака — они локальные
         }
         else if (id.startsWith('grades-')) result.grades = result.grades.concat(data.grades || []);
         else if (id.startsWith('diagnostics-')) result.diagnostics = result.diagnostics.concat(data.diagnostics || []);
@@ -611,6 +608,8 @@ const DB = {
         }
       } else {
         console.log('[Firebase] Локальные данные новее — оставляем');
+        // ✅ ИЗМЕНЕНИЕ: обновляем метку, чтобы в виджете не висело «никогда»
+        this._lastCloudSync = maxCloudTime;
       }
     } catch (err) {
       console.warn('[Firebase] Ошибка syncFromCloud:', err.code || err.message);
@@ -643,18 +642,80 @@ const DB = {
     }
   },
 
-  /* ---------- ЗДОРОВЬЕ СИСТЕМЫ ---------- */
+  /* ---------- ЗДОРОВЬЕ СИСТЕМЫ (новая схема: считаем самый большой документ) ---------- */
   getHealth() {
     const d = this.load();
-    const json = JSON.stringify(d);
-    const sizeBytes = new Blob([json]).size;
-    const sizeKB = +(sizeBytes / 1024).toFixed(1);
-    const sizeMB = +(sizeBytes / 1024 / 1024).toFixed(2);
-    const LS_LIMIT = 5 * 1024 * 1024;
-    const FS_LIMIT = 1 * 1024 * 1024;
-    const lsPercent = Math.min(100, Math.round(sizeBytes / LS_LIMIT * 100));
-    const fsPercent = Math.min(100, Math.round(sizeBytes / FS_LIMIT * 100));
 
+    // === 1. Считаем размер БАЗЫ БЕЗ снапшотов (снапшоты — только в localStorage, в облако не идут) ===
+    const cloneForCloud = { ...d };
+    delete cloneForCloud.snapshots;
+    const cloudJson = JSON.stringify(cloneForCloud);
+    const cloudSizeBytes = new Blob([cloudJson]).size;
+    const cloudSizeKB = +(cloudSizeBytes / 1024).toFixed(1);
+    const cloudSizeMB = +(cloudSizeBytes / 1024 / 1024).toFixed(2);
+
+    // === 2. Считаем размер ПОЛНОЙ базы (с снапшотами) — для LocalStorage ===
+    const fullJson = JSON.stringify(d);
+    const fullSizeBytes = new Blob([fullJson]).size;
+    const fullSizeKB = +(fullSizeBytes / 1024).toFixed(1);
+    const fullSizeMB = +(fullSizeBytes / 1024 / 1024).toFixed(2);
+
+    // === 3. Разбиваем данные ТОЧНО ТАК ЖЕ, как _saveToCloud, и считаем размеры документов ===
+    const yearsSet = new Set();
+    (d.grades || []).forEach(g => yearsSet.add(g.year || '2024-2025'));
+    (d.diagnostics || []).forEach(x => yearsSet.add((x.date || '').slice(0, 4) || 'unknown'));
+    (d.taskResults || []).forEach(r => yearsSet.add((r.date || '').slice(0, 4) || 'unknown'));
+    const years = [...yearsSet].sort();
+
+    const docSizes = {
+      meta: new Blob([JSON.stringify({
+        users: d.users || [], teachers: d.teachers || [],
+        subjectTeachersList: d.subjectTeachersList || [],
+        subjectTeachers: d.subjectTeachers || [],
+        buildings: d.buildings || [], classes: d.classes || [],
+        subjects: d.subjects || [], nextIds: d.nextIds || {},
+      })]).size,
+      students: new Blob([JSON.stringify({ students: d.students || [] })]).size,
+      templates: new Blob([JSON.stringify({ templates: d.diagnosticTemplates || [] })]).size,
+      config: new Blob([JSON.stringify({
+        autoReports: d.autoReports || {},
+        dashboardWidgets: d.dashboardWidgets || [],
+        plannedDiagnostics: d.plannedDiagnostics || [],
+        classTransitions: d.classTransitions || [],
+        gradesHistory: d.gradesHistory || [],
+      })]).size,
+    };
+
+    years.forEach(y => {
+      const g = (d.grades || []).filter(x => (x.year || '2024-2025') === y);
+      const diag = (d.diagnostics || []).filter(x => {
+        const yx = (x.date || '').slice(0, 4);
+        return yx === y || (y === 'unknown' && !yx);
+      });
+      const tr = (d.taskResults || []).filter(x => {
+        const yx = (x.date || '').slice(0, 4);
+        return yx === y || (y === 'unknown' && !yx);
+      });
+      docSizes['grades-' + y] = new Blob([JSON.stringify({ grades: g })]).size;
+      docSizes['diagnostics-' + y] = new Blob([JSON.stringify({ diagnostics: diag })]).size;
+      docSizes['taskResults-' + y] = new Blob([JSON.stringify({ taskResults: tr })]).size;
+    });
+
+    // === 4. Находим самый большой документ ===
+    let biggestDocName = '—';
+    let biggestDocBytes = 0;
+    Object.entries(docSizes).forEach(([name, size]) => {
+      if (size > biggestDocBytes) { biggestDocBytes = size; biggestDocName = name; }
+    });
+
+    // === 5. Проценты ===
+    const LS_LIMIT = 5 * 1024 * 1024;      // 5 МБ на localStorage
+    const FS_LIMIT = 1 * 1024 * 1024;      // 1 МБ на документ Firestore
+
+    const lsPercent = Math.min(100, Math.round(fullSizeBytes / LS_LIMIT * 100));
+    const fsPercent = Math.min(100, Math.round(biggestDocBytes / FS_LIMIT * 100));
+
+    // === 6. Разбивка по сущностям ===
     const breakdown = {
       students: (d.students || []).length,
       grades: (d.grades || []).length,
@@ -670,16 +731,28 @@ const DB = {
       snapshots: (d.snapshots || []).length,
     };
 
-    const freeBytes = Math.max(0, FS_LIMIT - sizeBytes);
-    const avgGradeBytes = breakdown.grades > 0 ? sizeBytes / breakdown.grades : 100;
-    const additionalGrades = Math.floor(freeBytes / avgGradeBytes);
+    // === 7. Прогноз: сколько оценок ещё влезет в самый большой документ ===
+    const freeBytes = Math.max(0, FS_LIMIT - biggestDocBytes);
+    const biggestGradesCount = biggestDocName.startsWith('grades-')
+      ? (d.grades || []).filter(x => (x.year || '2024-2025') === biggestDocName.replace('grades-', '')).length
+      : (d.grades || []).length;
+    const avgGradeBytes = biggestGradesCount > 0 ? biggestDocBytes / biggestGradesCount : 100;
+    const additionalGrades = Math.floor(freeBytes / Math.max(avgGradeBytes, 50));
 
+    // === 8. Общий уровень ===
     let level = 'ok';
     if (fsPercent >= 80 || lsPercent >= 80) level = 'warn';
     if (fsPercent >= 95 || lsPercent >= 95) level = 'danger';
 
     return {
-      sizeBytes, sizeKB, sizeMB,
+      // Размер всей базы (для общей инфы)
+      cloudSizeBytes, cloudSizeKB, cloudSizeMB,
+      fullSizeBytes, fullSizeKB, fullSizeMB,
+      // Самый большой документ
+      biggestDocName, biggestDocBytes,
+      biggestDocKB: +(biggestDocBytes / 1024).toFixed(1),
+      docSizes, years,
+      // Лимиты
       lsLimit: LS_LIMIT, fsLimit: FS_LIMIT,
       lsPercent, fsPercent,
       breakdown, additionalGrades,
@@ -687,7 +760,7 @@ const DB = {
       firebaseReady, firebaseAuthReady,
     };
   },
-
+  
   _migrate() {
     this._data.diagnostics = (this._data.diagnostics || []).map(d => ({
       type: 'предметная', subject: '', score: null, maxScore: null, level: '', ...d
@@ -1569,6 +1642,7 @@ function renderChartToImage(type, width, height, config) {
   tmp.destroy(); c.remove();
   return `<img src="${url}" class="chart-img" alt="График">`;
 }
+
 /* ============================================================
    РЕНДЕР: HEADER
    ============================================================ */
@@ -2056,6 +2130,7 @@ function drawParallelsChart() {
     },
   });
 }
+
 /* ============================================================
    ПАНЕЛЬ С ВИДЖЕТАМИ
    ============================================================ */
@@ -2119,6 +2194,7 @@ function renderWidgetStats(students, classes, subjects, diags) {
   </div>`;
 }
 
+/* ✅ ИЗМЕНЕНИЕ: виджет здоровья — показывает размер самого большого документа */
 function renderWidgetHealth() {
   const h = DB.getHealth();
   const levelColor = h.level === 'ok' ? 'var(--success)' : h.level === 'warn' ? 'var(--warning)' : 'var(--danger)';
@@ -2137,10 +2213,22 @@ function renderWidgetHealth() {
     <div style="display:flex;flex-direction:column;gap:14px;">
       <div style="display:flex;justify-content:space-between;align-items:center;">
         <div>
-          <div style="font-size:24px;font-weight:800;color:${levelColor};">${h.sizeMB < 0.01 ? h.sizeKB + ' КБ' : h.sizeMB + ' МБ'}</div>
+          <div style="font-size:24px;font-weight:800;color:${levelColor};">${h.biggestDocKB} КБ</div>
           <div class="muted" style="font-size:11px;">${levelIcon} ${levelText}</div>
+          <div class="muted" style="font-size:10px;margin-top:2px;">Макс. документ: <b>${esc(h.biggestDocName)}</b></div>
         </div>
         <div style="text-align:right;">${fsStatus}</div>
+      </div>
+
+      <div>
+        <div style="display:flex;justify-content:space-between;font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:4px;">
+          <span>☁️ Самый большой документ</span>
+          <span style="color:${barColor(h.fsPercent)};">${h.fsPercent}%</span>
+        </div>
+        <div style="height:8px;background:#e2e8f0;border-radius:4px;overflow:hidden;">
+          <div style="width:${h.fsPercent}%;height:100%;background:${barColor(h.fsPercent)};transition:width .3s;"></div>
+        </div>
+        <div class="muted" style="font-size:10px;margin-top:2px;">Лимит документа: 1 МБ · документов: ${Object.keys(h.docSizes).length}</div>
       </div>
 
       <div>
@@ -2151,18 +2239,7 @@ function renderWidgetHealth() {
         <div style="height:8px;background:#e2e8f0;border-radius:4px;overflow:hidden;">
           <div style="width:${h.lsPercent}%;height:100%;background:${barColor(h.lsPercent)};transition:width .3s;"></div>
         </div>
-        <div class="muted" style="font-size:10px;margin-top:2px;">Лимит браузера: 5 МБ</div>
-      </div>
-
-      <div>
-        <div style="display:flex;justify-content:space-between;font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:4px;">
-          <span>☁️ Firestore</span>
-          <span style="color:${barColor(h.fsPercent)};">${h.fsPercent}%</span>
-        </div>
-        <div style="height:8px;background:#e2e8f0;border-radius:4px;overflow:hidden;">
-          <div style="width:${h.fsPercent}%;height:100%;background:${barColor(h.fsPercent)};transition:width .3s;"></div>
-        </div>
-        <div class="muted" style="font-size:10px;margin-top:2px;">Лимит документа: 1 МБ</div>
+        <div class="muted" style="font-size:10px;margin-top:2px;">Вся база + снапшоты: ${h.fullSizeMB < 0.01 ? h.fullSizeKB + ' КБ' : h.fullSizeMB + ' МБ'} (лимит 5 МБ)</div>
       </div>
 
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;padding-top:10px;border-top:1px solid var(--border);font-size:11px;">
@@ -2692,6 +2769,7 @@ function delDiag(id) {
   DB.deleteDiagnostic(id);
   showToast('Удалено', 'success'); render();
 }
+
 /* ============================================================
    МАССОВЫЕ ОПЕРАЦИИ С КЛАССОМ
    ============================================================ */
@@ -3505,6 +3583,7 @@ function delTeacherNote(teacherId, noteId) {
   DB.deleteNote(teacherId, noteId);
   render();
 }
+
 /* ============================================================
    ЖУРНАЛ
    ============================================================ */
@@ -3764,7 +3843,7 @@ function delUser(id) {
 }
 
 /* ============================================================
-   ПАНЕЛЬ ЗДОРОВЬЯ (для раздела Бэкап)
+   ПАНЕЛЬ ЗДОРОВЬЯ — ✅ ИЗМЕНЕНО (считает размер самого большого документа)
    ============================================================ */
 function renderHealthPanel() {
   const h = DB.getHealth();
@@ -3783,24 +3862,39 @@ function renderHealthPanel() {
     { icon: '📅', label: 'Планируемые работы', key: 'plannedDiagnostics' },
     { icon: '👤', label: 'Пользователи', key: 'users' },
     { icon: '📚', label: 'Предметы', key: 'subjects' },
-    { icon: '💾', label: 'Снапшоты', key: 'snapshots' },
+    { icon: '💾', label: 'Снапшоты (только в браузере)', key: 'snapshots' },
   ].map(r => `<tr>
     <td style="font-size:14px;">${r.icon} ${r.label}</td>
     <td class="text-right"><b>${h.breakdown[r.key]}</b></td>
   </tr>`).join('');
+
+  // ✅ Разбивка по документам Firestore
+  const docRows = Object.entries(h.docSizes)
+    .sort((a, b) => b[1] - a[1])
+    .map(([name, bytes]) => {
+      const kb = (bytes / 1024).toFixed(1);
+      const percent = Math.min(100, Math.round(bytes / h.fsLimit * 100));
+      const isBiggest = name === h.biggestDocName;
+      const color = percent >= 80 ? 'var(--danger)' : percent >= 50 ? 'var(--warning)' : 'var(--success)';
+      return `<tr style="${isBiggest ? 'background:var(--primary-soft);font-weight:600;' : ''}">
+        <td>${isBiggest ? '📌 ' : ''}${esc(name)}</td>
+        <td class="text-right">${kb} КБ</td>
+        <td class="text-right" style="color:${color};">${percent}%</td>
+      </tr>`;
+    }).join('');
 
   let recommendations = '';
   if (h.level === 'danger') {
     recommendations = `
       <div class="alert alert-error">
         <b>⚠️ Критическая ситуация</b><br>
-        Данные занимают ${h.fsPercent}% от лимита Firestore. Скоро новые записи перестанут сохраняться в облако.
+        Самый большой документ <b>${esc(h.biggestDocName)}</b> занимает ${h.fsPercent}% от лимита Firestore (1 МБ).
+        Скоро новые записи в этот документ перестанут сохраняться.
         <br><br>
         <b>Что делать:</b>
         <ul style="margin-left:20px;margin-top:8px;">
-          <li>Создайте снапшот для архива</li>
           <li>Скачайте резервную копию JSON</li>
-          <li>Обратитесь к разработчику для перехода на разбиение по документам</li>
+          <li>Обратитесь к разработчику для разбиения документа на части по параллелям или четвертям</li>
         </ul>
       </div>
     `;
@@ -3808,17 +3902,20 @@ function renderHealthPanel() {
     recommendations = `
       <div class="alert alert-warn">
         <b>🟡 Внимание</b><br>
-        Данные занимают ${h.fsPercent}% от лимита Firestore (${h.sizeMB} МБ из 1 МБ).
-        При текущем темпе можно добавить ещё примерно <b>${h.additionalGrades.toLocaleString('ru-RU')}</b> оценок.
+        Самый большой документ <b>${esc(h.biggestDocName)}</b> занимает ${h.fsPercent}% от лимита Firestore (${h.biggestDocKB} КБ из 1024 КБ).
+        При текущем темпе можно добавить ещё примерно <b>${h.additionalGrades.toLocaleString('ru-RU')}</b> оценок в этот документ.
         <br><br>
-        <b>Рекомендация:</b> сделайте резервную копию и создайте снапшот.
+        <b>Рекомендация:</b> сделайте резервную копию и следите за ростом.
       </div>
     `;
   } else {
     recommendations = `
       <div class="alert alert-success">
         <b>🟢 Всё в порядке</b><br>
-        Данные занимают ${h.fsPercent}% от лимита Firestore. Можно добавить ещё примерно <b>${h.additionalGrades.toLocaleString('ru-RU')}</b> оценок.
+        Самый большой документ <b>${esc(h.biggestDocName)}</b> занимает всего ${h.fsPercent}% от лимита Firestore (${h.biggestDocKB} КБ из 1024 КБ).
+        Можно добавить ещё примерно <b>${h.additionalGrades.toLocaleString('ru-RU')}</b> оценок.
+        <br><br>
+        <b>Учебных годов в базе:</b> ${h.years.length} (${h.years.join(', ') || '—'})
       </div>
     `;
   }
@@ -3828,10 +3925,10 @@ function renderHealthPanel() {
       <div class="row-flex" style="justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:16px;">
         <div>
           <h2 style="margin:0;">${icon('database', 18)} Здоровье системы</h2>
-          <div class="muted" style="margin-top:4px;">Текущий размер базы данных и свободное место</div>
+          <div class="muted" style="margin-top:4px;">Размер самого большого документа Firestore и общая загрузка</div>
         </div>
         <div style="text-align:right;">
-          <div style="font-size:32px;font-weight:800;color:${levelColor};line-height:1;">${h.sizeMB < 0.01 ? h.sizeKB + ' КБ' : h.sizeMB + ' МБ'}</div>
+          <div style="font-size:32px;font-weight:800;color:${levelColor};line-height:1;">${h.biggestDocKB} КБ</div>
           <div class="muted" style="font-size:12px;">${levelText}</div>
         </div>
       </div>
@@ -3841,24 +3938,32 @@ function renderHealthPanel() {
       <div class="form-grid" style="margin-bottom:20px;">
         <div>
           <div style="display:flex;justify-content:space-between;font-size:13px;font-weight:600;color:var(--text-2);margin-bottom:6px;">
+            <span>☁️ Самый большой документ</span>
+            <span style="color:${barColor(h.fsPercent)};">${h.fsPercent}%</span>
+          </div>
+          <div style="height:10px;background:#e2e8f0;border-radius:5px;overflow:hidden;">
+            <div style="width:${h.fsPercent}%;height:100%;background:${barColor(h.fsPercent)};transition:width .3s;"></div>
+          </div>
+          <div class="muted" style="font-size:11px;margin-top:4px;">📌 ${esc(h.biggestDocName)} · лимит 1 МБ</div>
+        </div>
+        <div>
+          <div style="display:flex;justify-content:space-between;font-size:13px;font-weight:600;color:var(--text-2);margin-bottom:6px;">
             <span>📴 LocalStorage</span>
             <span style="color:${barColor(h.lsPercent)};">${h.lsPercent}%</span>
           </div>
           <div style="height:10px;background:#e2e8f0;border-radius:5px;overflow:hidden;">
             <div style="width:${h.lsPercent}%;height:100%;background:${barColor(h.lsPercent)};transition:width .3s;"></div>
           </div>
-          <div class="muted" style="font-size:11px;margin-top:4px;">Лимит браузера: 5 МБ</div>
+          <div class="muted" style="font-size:11px;margin-top:4px;">Вся база + снапшоты: ${h.fullSizeMB < 0.01 ? h.fullSizeKB + ' КБ' : h.fullSizeMB + ' МБ'} (лимит 5 МБ)</div>
         </div>
-        <div>
-          <div style="display:flex;justify-content:space-between;font-size:13px;font-weight:600;color:var(--text-2);margin-bottom:6px;">
-            <span>☁️ Firestore</span>
-            <span style="color:${barColor(h.fsPercent)};">${h.fsPercent}%</span>
-          </div>
-          <div style="height:10px;background:#e2e8f0;border-radius:5px;overflow:hidden;">
-            <div style="width:${h.fsPercent}%;height:100%;background:${barColor(h.fsPercent)};transition:width .3s;"></div>
-          </div>
-          <div class="muted" style="font-size:11px;margin-top:4px;">Лимит документа: 1 МБ</div>
-        </div>
+      </div>
+
+      <h3 style="margin-top:20px;">${icon('database', 16)} Разбивка по документам Firestore</h3>
+      <div class="table-wrap" style="margin-bottom:20px;">
+        <table>
+          <thead><tr><th>Документ</th><th class="text-right">Размер</th><th class="text-right">% от лимита</th></tr></thead>
+          <tbody>${docRows}</tbody>
+        </table>
       </div>
 
       <h3 style="margin-top:20px;">Что хранится в базе</h3>
@@ -3871,7 +3976,8 @@ function renderHealthPanel() {
 
       <div style="margin-top:16px;padding:12px 16px;background:#f8fafc;border-radius:8px;border-left:3px solid var(--primary);font-size:13px;color:var(--text-2);line-height:1.5;">
         <b>Как устроено хранение:</b><br>
-        Данные разбиты на несколько документов в облаке: meta (справочники), students (ученики), templates (шаблоны), config (настройки) и годовые документы (grades-YYYY, diagnostics-YYYY, taskResults-YYYY). Каждый год — отдельные документы, поэтому общая ёмкость измеряется десятками МБ.
+        Данные разбиты на несколько документов в облаке: <b>meta</b> (справочники), <b>students</b> (ученики), <b>templates</b> (шаблоны), <b>config</b> (настройки) и годовые документы (<b>grades-YYYY</b>, <b>diagnostics-YYYY</b>, <b>taskResults-YYYY</b>). Каждый год — отдельные документы, поэтому общая ёмкость измеряется десятками МБ.<br><br>
+        <b>Снапшоты</b> хранятся только в браузере (localStorage) и в облако не отправляются — они нужны только для локального восстановления.
       </div>
     </div>
   `;
@@ -3917,6 +4023,7 @@ function renderBackup() {
         <h2 style="margin:0;">${icon('database', 18)} Снапшоты</h2>
         ${snapshots.length ? `<button class="btn btn-danger btn-sm" onclick="clearAllSnapshots()" title="Очистить">${icon('trash', 14)}</button>` : ''}
       </div>
+      <div class="alert alert-info" style="font-size:13px;">${icon('info', 14)} Снапшоты хранятся только в браузере и не отправляются в облако.</div>
       ${snapshots.length ? `<div class="table-wrap"><table>
         <thead><tr><th>Название</th><th>Дата</th><th class="text-right">Размер</th><th></th></tr></thead>
         <tbody>${rows}</tbody></table></div>`
@@ -4765,6 +4872,7 @@ function renderAnalyticsTeachers(tabs) {
     </div>
   `, 'analytics');
 }
+
 /* ============================================================
    УНИВЕРСАЛЬНЫЙ ОТРИСОВЩИК ГРАФИКОВ
    ============================================================ */
@@ -6027,7 +6135,7 @@ initMobileMode();
 UndoStack.load();
 render();
 
-// Облачная синхронизация при старте — один раз
+// Облачная синхронизация при старте — ОДИН РАЗ (после анонимного входа Firebase)
 setTimeout(async () => {
   if (typeof DB === 'undefined') return;
 
