@@ -409,7 +409,12 @@ try {
     .catch(err => console.warn('[Firebase] Офлайн-кеш недоступен:', err.code));
   
   firebaseReady = true;
-  console.log('[Firebase] Инициализирован');
+console.log('[Firebase] Инициализирован');
+
+// Анонимный вход для доступа к Firestore
+firebase.auth().signInAnonymously()
+  .then(() => console.log('[Firebase] Анонимный вход выполнен'))
+  .catch(err => console.warn('[Firebase] Ошибка анонимного входа:', err));
 } catch (err) {
   console.warn('[Firebase] Не удалось инициализировать:', err);
   firebaseReady = false;
@@ -418,12 +423,44 @@ const DB = {
   _key: 'school_analytics_db_v5',
   _data: null,
   load() {
-    if (this._data) return this._data;
-    const raw = localStorage.getItem(this._key);
-    if (raw) { this._data = JSON.parse(raw); this._migrate(); this.save(); }
-    else { this._data = this.seed(); this.save(); }
-    return this._data;
-  },
+  if (this._data) return this._data;
+  const raw = localStorage.getItem(this._key);
+  if (raw) { this._data = JSON.parse(raw); this._migrate(); this.save(); }
+  else { this._data = this.seed(); this.save(); }
+
+  // Фоновая загрузка из облака (не блокирует работу приложения)
+  if (firebaseReady && firestore) {
+    firestore.collection('schools').doc('default').get()
+      .then(doc => {
+        if (doc.exists && doc.data().data) {
+          const cloudData = doc.data().data;
+          const cloudTime = doc.data().updatedAt ? doc.data().updatedAt.toMillis() : 0;
+          const localTime = this._lastCloudSync || 0;
+          // Если в облаке данные новее — подтягиваем
+          if (cloudTime > localTime) {
+            this._data = cloudData;
+            this._migrate();
+            localStorage.setItem(this._key, JSON.stringify(this._data));
+            this._lastCloudSync = cloudTime;
+            console.log('[Firebase] Данные загружены из облака, время:', new Date(cloudTime).toLocaleString('ru-RU'));
+            // Перерисовываем интерфейс если он уже отрисован
+            if (typeof render === 'function' && typeof SESSION !== 'undefined' && SESSION) {
+              render();
+            }
+          } else {
+            console.log('[Firebase] Локальные данные новее, оставляем как есть');
+          }
+        } else {
+          console.log('[Firebase] В облаке пока нет данных — это первая синхронизация');
+        }
+      })
+      .catch(err => {
+        console.warn('[Firebase] Ошибка загрузки из облака:', err);
+      });
+  }
+
+  return this._data;
+},
   _migrate() {
     this._data.diagnostics = (this._data.diagnostics || []).map(d => ({
       type: 'предметная', subject: '', score: null, maxScore: null, level: '', ...d
@@ -519,7 +556,21 @@ const DB = {
     push(10, 5, '2024-11-10', {1:1,2:0,3:0,4:0,5:0,6:0,7:0,8:1});
     return { templates, results, nextTemplateId: 6, nextResultId: trId };
   },
-  save() { localStorage.setItem(this._key, JSON.stringify(this._data)); },
+  save() {
+  localStorage.setItem(this._key, JSON.stringify(this._data));
+  // Фоновая отправка в облако
+  if (firebaseReady && firestore) {
+    firestore.collection('schools').doc('default').set({
+      data: this._data,
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+      version: 5
+    }).then(() => {
+      console.log('[Firebase] Данные сохранены в облако');
+    }).catch(err => {
+      console.warn('[Firebase] Ошибка сохранения:', err);
+    });
+  }
+},
   reset() { localStorage.removeItem(this._key); this._data = null; },
   seed() {
     const subjects = ['Русский язык','Литература','Математика','Алгебра','Геометрия','Информатика','История','Обществознание','География','Биология','Физика','Химия','Английский язык','Физическая культура','ОБЖ','Технология'];
