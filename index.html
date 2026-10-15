@@ -246,7 +246,7 @@ html[data-theme="dark"] .diag-cell-fail{background:rgba(229,62,62,.25);color:#fc
 
 <script>
 /* ============================================================
-   ШКОЛЬНАЯ АНАЛИТИКА — единый скрипт (сборка с фичами A-D)
+   ШКОЛЬНАЯ АНАЛИТИКА — единый скрипт с облачной синхронизацией
    ============================================================ */
 const PERIODS = ['I четверть','II четверть','III четверть','IV четверть','Год'];
 const GRADE_TYPES = ['текущая','промежуточная','итоговая'];
@@ -381,9 +381,6 @@ window.addEventListener('offline', updateOnlineStatus);
 updateOnlineStatus();
 
 /* ============================================================
-   БАЗА ДАННЫХ
-   ============================================================ */
-/* ============================================================
    FIREBASE — облачное хранилище
    ============================================================ */
 const firebaseConfig = {
@@ -398,69 +395,90 @@ const firebaseConfig = {
 let firebaseApp = null;
 let firestore = null;
 let firebaseReady = false;
+let firebaseAuthReady = false;
 
 try {
   firebaseApp = firebase.initializeApp(firebaseConfig);
   firestore = firebase.firestore();
-  
-  // Офлайн-кеш — данные будут работать без интернета
+
   firestore.enablePersistence({ synchronizeTabs: true })
     .then(() => console.log('[Firebase] Офлайн-кеш включён'))
     .catch(err => console.warn('[Firebase] Офлайн-кеш недоступен:', err.code));
-  
-  firebaseReady = true;
-console.log('[Firebase] Инициализирован');
 
-// Анонимный вход для доступа к Firestore
-firebase.auth().signInAnonymously()
-  .then(() => console.log('[Firebase] Анонимный вход выполнен'))
-  .catch(err => console.warn('[Firebase] Ошибка анонимного входа:', err));
+  firebaseReady = true;
+  console.log('[Firebase] Инициализирован');
+
+  // Анонимный вход
+  firebase.auth().signInAnonymously()
+    .then(() => {
+      firebaseAuthReady = true;
+      console.log('[Firebase] Анонимный вход выполнен');
+      // Как только авторизация готова — сразу синхронизируем
+      setTimeout(() => DB.syncFromCloud(), 300);
+    })
+    .catch(err => console.warn('[Firebase] Ошибка анонимного входа:', err));
 } catch (err) {
   console.warn('[Firebase] Не удалось инициализировать:', err);
   firebaseReady = false;
 }
+/* ============================================================
+   БАЗА ДАННЫХ
+   ============================================================ */
 const DB = {
   _key: 'school_analytics_db_v5',
   _data: null,
+  _lastCloudSync: 0,
+
   load() {
-  if (this._data) return this._data;
-  const raw = localStorage.getItem(this._key);
-  if (raw) { this._data = JSON.parse(raw); this._migrate(); this.save(); }
-  else { this._data = this.seed(); this.save(); }
+    if (this._data) return this._data;
+    const raw = localStorage.getItem(this._key);
+    if (raw) { this._data = JSON.parse(raw); this._migrate(); this.save(); }
+    else { this._data = this.seed(); this.save(); }
+    return this._data;
+  },
 
-  // Фоновая загрузка из облака (не блокирует работу приложения)
-  if (firebaseReady && firestore) {
-    firestore.collection('schools').doc('default').get({ source: 'server' })
-      .then(doc => {
-        if (doc.exists && doc.data().data) {
-          const cloudData = doc.data().data;
-          const cloudTime = doc.data().updatedAt ? doc.data().updatedAt.toMillis() : 0;
-          const localTime = this._lastCloudSync || 0;
-          // Если в облаке данные новее — подтягиваем
-          if (cloudTime > localTime) {
-            this._data = cloudData;
-            this._migrate();
-            localStorage.setItem(this._key, JSON.stringify(this._data));
-            this._lastCloudSync = cloudTime;
-            console.log('[Firebase] Данные загружены из облака, время:', new Date(cloudTime).toLocaleString('ru-RU'));
-            // Перерисовываем интерфейс если он уже отрисован
-            if (typeof render === 'function' && typeof SESSION !== 'undefined' && SESSION) {
-              render();
-            }
-          } else {
-            console.log('[Firebase] Локальные данные новее, оставляем как есть');
-          }
-        } else {
-          console.log('[Firebase] В облаке пока нет данных — это первая синхронизация');
+  // Отдельный метод: загрузка данных из облака
+  async syncFromCloud() {
+    if (!firebaseReady || !firestore || !firebaseAuthReady) {
+      console.log('[Firebase] syncFromCloud отложен: Firebase не готов');
+      return;
+    }
+    try {
+      const doc = await firestore.collection('schools').doc('default').get({ source: 'server' });
+      if (!doc.exists) {
+        console.log('[Firebase] В облаке нет данных — первая синхронизация');
+        return;
+      }
+      const cloudData = doc.data().data;
+      if (!cloudData) {
+        console.log('[Firebase] В облаке пустое поле data');
+        return;
+      }
+      const cloudTime = doc.data().updatedAt ? doc.data().updatedAt.toMillis() : 0;
+      const localTime = this._lastCloudSync || 0;
+
+      console.log('[Firebase] Облако:', new Date(cloudTime).toLocaleString('ru-RU'));
+      console.log('[Firebase] Локально синхронизировано в:', localTime ? new Date(localTime).toLocaleString('ru-RU') : 'никогда');
+
+      // Если в облаке новее или локально ещё не синхронизировались
+      if (cloudTime > localTime || localTime === 0) {
+        this._data = cloudData;
+        this._migrate();
+        localStorage.setItem(this._key, JSON.stringify(this._data));
+        this._lastCloudSync = cloudTime;
+        console.log('[Firebase] ✅ Данные загружены из облака');
+        if (typeof render === 'function' && typeof SESSION !== 'undefined' && SESSION) {
+          render();
+          showToast('Данные обновлены из облака', 'success', 2000);
         }
-      })
-      .catch(err => {
-        console.warn('[Firebase] Ошибка загрузки из облака:', err);
-      });
-  }
+      } else {
+        console.log('[Firebase] Локальные данные новее или равны — оставляем');
+      }
+    } catch (err) {
+      console.warn('[Firebase] Ошибка syncFromCloud:', err.code || err.message);
+    }
+  },
 
-  return this._data;
-},
   _migrate() {
     this._data.diagnostics = (this._data.diagnostics || []).map(d => ({
       type: 'предметная', subject: '', score: null, maxScore: null, level: '', ...d
@@ -480,19 +498,16 @@ const DB = {
     if (!this._data.taskResults) this._data.taskResults = [];
     if (!this._data.nextIds.templateId) this._data.nextIds.templateId = 1;
     if (!this._data.nextIds.taskResultId) this._data.nextIds.taskResultId = 1;
-    // Планируемые диагностики
     if (!Array.isArray(this._data.plannedDiagnostics)) this._data.plannedDiagnostics = [];
     if (!this._data.nextIds.plannedDiagId) {
       const maxId = this._data.plannedDiagnostics.reduce((m, p) => Math.max(m, p.id || 0), 0);
       this._data.nextIds.plannedDiagId = maxId + 1;
     }
-    // История переводов классов
     if (!Array.isArray(this._data.classTransitions)) this._data.classTransitions = [];
     if (!this._data.nextIds.transitionId) {
       const maxId = this._data.classTransitions.reduce((m, t) => Math.max(m, t.id || 0), 0);
       this._data.nextIds.transitionId = maxId + 1;
     }
-    // Если шаблонов нет — заливаем демо
     if (!this._data.diagnosticTemplates || this._data.diagnosticTemplates.length === 0) {
       const demo = this._seedDemoDiagnostics();
       this._data.diagnosticTemplates = demo.templates;
@@ -501,6 +516,7 @@ const DB = {
       this._data.nextIds.taskResultId = demo.nextResultId;
     }
   },
+
   _seedDemoDiagnostics() {
     const templates = [
       { id:1, name:'ВПР Математика 5 класс', type:'ВПР', subject:'Математика', classLevel:'5', tasks:[
@@ -556,22 +572,27 @@ const DB = {
     push(10, 5, '2024-11-10', {1:1,2:0,3:0,4:0,5:0,6:0,7:0,8:1});
     return { templates, results, nextTemplateId: 6, nextResultId: trId };
   },
+
   save() {
-  localStorage.setItem(this._key, JSON.stringify(this._data));
-  // Фоновая отправка в облако
-  if (firebaseReady && firestore) {
-    firestore.collection('schools').doc('default').set({
-      data: this._data,
-      updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
-      version: 5
-    }).then(() => {
-      console.log('[Firebase] Данные сохранены в облако');
-    }).catch(err => {
-      console.warn('[Firebase] Ошибка сохранения:', err);
-    });
-  }
-},
+    localStorage.setItem(this._key, JSON.stringify(this._data));
+    // Фоновая отправка в облако
+    if (firebaseReady && firestore && firebaseAuthReady) {
+      firestore.collection('schools').doc('default').set({
+        data: this._data,
+        updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+        version: 5
+      }).then(() => {
+        // Запоминаем, что локально уже синхронизировано
+        this._lastCloudSync = Date.now();
+        console.log('[Firebase] Сохранено в облако');
+      }).catch(err => {
+        console.warn('[Firebase] Ошибка сохранения:', err.code || err.message);
+      });
+    }
+  },
+
   reset() { localStorage.removeItem(this._key); this._data = null; },
+
   seed() {
     const subjects = ['Русский язык','Литература','Математика','Алгебра','Геометрия','Информатика','История','Обществознание','География','Биология','Физика','Химия','Английский язык','Физическая культура','ОБЖ','Технология'];
     const users = [
@@ -714,17 +735,16 @@ const DB = {
                         subjectTeacher:10, subjectTeacherList:6, noteId:2, templateId:6, taskResultId:trId,
                         plannedDiagId:1, transitionId:1 } };
   },
+
   nextId(e) { const d = this.load(); const id = d.nextIds[e]; d.nextIds[e]++; this.save(); return id; },
-    getUsers() { return this.load().users; },
+  getUsers() { return this.load().users; },
   findUser(l,p) { return this.load().users.find(u => u.login === l && u.password === p); },
   addUser(u) { const d=this.load(); u.id=this.nextId('user'); d.users.push(u); this.save(); return u; },
   updateUser(id,patch) { const d=this.load(); const u=d.users.find(x=>x.id===id); if(u) Object.assign(u,patch); this.save(); },
   deleteUser(id) { const d=this.load(); d.users=d.users.filter(u=>u.id!==id); this.save(); },
-
   getTeachers() { return this.load().teachers; },
   addTeacher(name) { const d=this.load(); const t={id:this.nextId('teacher'),name}; d.teachers.push(t); this.save(); return t; },
   deleteTeacher(id) { const d=this.load(); d.teachers=d.teachers.filter(t=>t.id!==id); this.save(); },
-
   getSubjectTeachersList() { return this.load().subjectTeachersList; },
   addSubjectTeacher(name) { const d=this.load(); const t={id:this.nextId('subjectTeacherList'),name,mckoLevel:'нет',mckoDate:'',notes:[]}; d.subjectTeachersList.push(t); this.save(); return t; },
   updateSubjectTeacher(id,patch) { const d=this.load(); const t=d.subjectTeachersList.find(x=>x.id===id); if(t) Object.assign(t,patch); this.save(); },
@@ -885,27 +905,18 @@ const DB = {
     d.taskResults = d.taskResults.filter(x => x.id !== id);
     this.save();
   },
-  /* ---- Массовые операции с классом ---- */
   renameClass(classId, newName) {
     const d = this.load();
     const c = d.classes.find(x => x.id === classId);
     if (!c) return false;
     const oldName = c.name;
     c.name = newName;
-    d.classTransitions.push({
-      id: d.nextIds.transitionId++,
-      classId,
-      oldName,
-      newName,
-      date: todayStr(),
-      year: '2024-2025',
-    });
+    d.classTransitions.push({ id: d.nextIds.transitionId++, classId, oldName, newName, date: todayStr(), year: '2024-2025' });
     this.save();
     return true;
   },
   getClassTransitions(classId) {
-    return (this.load().classTransitions || []).filter(t => t.classId === classId)
-      .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+    return (this.load().classTransitions || []).filter(t => t.classId === classId).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
   },
   promoteClass(classId, opts) {
     opts = opts || {};
@@ -922,34 +933,19 @@ const DB = {
     c.name = newName;
     if (opts.buildingId) c.buildingId = opts.buildingId;
     if (opts.teacherId !== undefined) c.teacherId = opts.teacherId;
-    d.classTransitions.push({
-      id: d.nextIds.transitionId++,
-      classId,
-      oldName,
-      newName,
-      date: todayStr(),
-      year: opts.year || '2024-2025',
-      note: 'Массовый перевод',
-    });
+    d.classTransitions.push({ id: d.nextIds.transitionId++, classId, oldName, newName, date: todayStr(), year: opts.year || '2024-2025', note: 'Массовый перевод' });
     this.save();
     return { oldName, newName };
   },
-  /* ---- Автосоздание класса при импорте ---- */
   findOrCreateClass(className, buildingId) {
     const d = this.load();
     let c = d.classes.find(x => x.name === className);
     if (c) return c;
-    const newClass = {
-      id: d.nextIds.class++,
-      name: className,
-      buildingId: buildingId || (d.buildings[0]?.id || 1),
-      teacherId: null,
-    };
+    const newClass = { id: d.nextIds.class++, name: className, buildingId: buildingId || (d.buildings[0]?.id || 1), teacherId: null };
     d.classes.push(newClass);
     this.save();
     return newClass;
   },
-  /* ---- Планируемые диагностики ---- */
   getPlannedDiagnostics() {
     return (this.load().plannedDiagnostics || []).sort((a, b) => (a.plannedDate || '').localeCompare(b.plannedDate || ''));
   },
@@ -973,7 +969,6 @@ const DB = {
     d.plannedDiagnostics = d.plannedDiagnostics.filter(p => p.id !== id);
     this.save();
   },
-  /* ---- Сравнение с предыдущим годом ---- */
   getClassYearComparison(classId) {
     const students = this.getStudents().filter(s => s.classId === classId);
     if (!students.length) return null;
@@ -988,12 +983,7 @@ const DB = {
       const cnt = gs.length;
       let quality = 0, success = 0;
       gs.forEach(g => { if (+g.value >= 4) quality++; if (+g.value >= 3) success++; });
-      perYear[y] = {
-        avg: cnt ? +(sum / cnt).toFixed(2) : 0,
-        count: cnt,
-        quality: cnt ? Math.round(quality / cnt * 100) : 0,
-        success: cnt ? Math.round(success / cnt * 100) : 0,
-      };
+      perYear[y] = { avg: cnt ? +(sum / cnt).toFixed(2) : 0, count: cnt, quality: cnt ? Math.round(quality / cnt * 100) : 0, success: cnt ? Math.round(success / cnt * 100) : 0 };
     });
     const perStudent = students.map(s => {
       const byYear = {};
@@ -1007,7 +997,6 @@ const DB = {
     }).filter(x => Object.values(x.byYear).some(v => v !== null));
     return { years, perYear, perStudent, hasData: true };
   },
-  /* ---- Портрет класса ---- */
   getClassPortrait(classId) {
     const students = this.getStudents().filter(s => s.classId === classId);
     const subjects = this.getSubjects();
@@ -1034,32 +1023,15 @@ const DB = {
       categories[cat].push({ student: s, avg: +sAvg.toFixed(2), count: sCnt });
     });
     const overallAvg = totalCnt ? +(totalSum / totalCnt).toFixed(2) : 0;
-    const problemSubjects = Object.entries(perSubject)
-      .filter(([sub, d]) => d.cnt > 0)
-      .map(([sub, d]) => ({
-        subject: sub,
-        avg: d.cnt ? +(d.sum / d.cnt).toFixed(2) : 0,
-        quality: d.cnt ? Math.round(d.quality / d.cnt * 100) : 0,
-        twos: d.twos,
-      }))
-      .sort((a, b) => a.avg - b.avg)
-      .slice(0, 3);
+    const problemSubjects = Object.entries(perSubject).filter(([sub, d]) => d.cnt > 0).map(([sub, d]) => ({
+      subject: sub, avg: d.cnt ? +(d.sum / d.cnt).toFixed(2) : 0, quality: d.cnt ? Math.round(d.quality / d.cnt * 100) : 0, twos: d.twos,
+    })).sort((a, b) => a.avg - b.avg).slice(0, 3);
     const needsAttention = students.map(s => {
       const r = studentRisk(s.id);
       return { student: s, risk: r };
-    }).filter(x => x.risk.level === 'high' || x.risk.level === 'medium')
-      .sort((a, b) => b.risk.score - a.risk.score);
-    return {
-      classObj,
-      studentsCount: students.length,
-      overallAvg,
-      categories,
-      problemSubjects,
-      needsAttention,
-      totalGrades: totalCnt,
-    };
+    }).filter(x => x.risk.level === 'high' || x.risk.level === 'medium').sort((a, b) => b.risk.score - a.risk.score);
+    return { classObj, studentsCount: students.length, overallAvg, categories, problemSubjects, needsAttention, totalGrades: totalCnt };
   },
-  /* ---- Карта школы по зданиям ---- */
   getSchoolMap() {
     const buildings = this.getBuildings();
     const classes = this.getClasses();
@@ -1069,9 +1041,7 @@ const DB = {
       const bStudents = students.filter(s => bClasses.some(c => c.id === s.classId));
       let sum = 0, cnt = 0, quality = 0;
       bStudents.forEach(s => {
-        this.getGrades()
-          .filter(g => g.studentId === s.id && /^[2-5]$/.test(g.value))
-          .forEach(g => { sum += +g.value; cnt++; if (+g.value >= 4) quality++; });
+        this.getGrades().filter(g => g.studentId === s.id && /^[2-5]$/.test(g.value)).forEach(g => { sum += +g.value; cnt++; if (+g.value >= 4) quality++; });
       });
       const teacher = this.getTeachers();
       return {
@@ -1080,17 +1050,9 @@ const DB = {
           const cStudents = students.filter(s => s.classId === c.id);
           let cs = 0, cc = 0, cq = 0;
           cStudents.forEach(s => {
-            this.getGrades()
-              .filter(g => g.studentId === s.id && /^[2-5]$/.test(g.value))
-              .forEach(g => { cs += +g.value; cc++; if (+g.value >= 4) cq++; });
+            this.getGrades().filter(g => g.studentId === s.id && /^[2-5]$/.test(g.value)).forEach(g => { cs += +g.value; cc++; if (+g.value >= 4) cq++; });
           });
-          return {
-            classObj: c,
-            students: cStudents.length,
-            avg: cc ? +(cs / cc).toFixed(2) : null,
-            quality: cc ? Math.round(cq / cc * 100) : null,
-            teacherName: teacher.find(t => t.id === c.teacherId)?.name || '—',
-          };
+          return { classObj: c, students: cStudents.length, avg: cc ? +(cs / cc).toFixed(2) : null, quality: cc ? Math.round(cq / cc * 100) : null, teacherName: teacher.find(t => t.id === c.teacherId)?.name || '—' };
         }),
         students: bStudents.length,
         avg: cnt ? +(sum / cnt).toFixed(2) : null,
@@ -1166,7 +1128,6 @@ function initMobileMode() {
    СВАЙПЫ
    ============================================================ */
 let swipeStartX = 0, swipeStartY = 0, swipeActive = false;
-
 function getAvailableTabs() {
   const tabs = ['dashboard','students','classes','analytics'];
   if (SESSION && SESSION.role === 'admin') tabs.push('journal','subject-teachers','directories','users','backup','diagnostics','reports');
@@ -1874,6 +1835,62 @@ function drawClassesAvgChart(classes, students, subjects, ctxId) {
       plugins: { legend: { display: false } },
       scales: { y: { min: 0, max: 5, ticks: { stepSize: .5, font: t.font, color: t.text }, grid: { color: t.grid } },
                 x: { ticks: { font: t.font, color: t.text }, grid: { display: false } } } }
+  });
+}
+function drawTeacherSubjectsChart(perSubject) {
+  destroyChart('teacherSubjects');
+  const ctx = document.getElementById('teacherSubjects');
+  if (!ctx) return;
+  const subjects = Object.keys(perSubject);
+  const values = subjects.map(sub => perSubject[sub].cnt ? +(perSubject[sub].sum / perSubject[sub].cnt).toFixed(2) : 0);
+  const t = chartTheme();
+  charts.teacherSubjects = new Chart(ctx, {
+    type: 'bar',
+    data: { labels: subjects, datasets: [{ label: 'Ср. балл', data: values,
+      backgroundColor: values.map(v => v>=4.5?'#38a169':v>=3.5?'#3182ce':v>=2.5?'#dd6b20':'#e53e3e'), borderRadius: 8 }] },
+    options: { responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: { y: { min: 0, max: 5, ticks: { stepSize: .5, font: t.font, color: t.text }, grid: { color: t.grid } },
+                x: { ticks: { font: t.font, color: t.text, maxRotation: 45 }, grid: { display: false } } } }
+  });
+}
+function drawTeacherDistChart(dist) {
+  destroyChart('teacherDist');
+  const ctx = document.getElementById('teacherDist');
+  if (!ctx) return;
+  const t = chartTheme();
+  charts.teacherDist = new Chart(ctx, {
+    type: 'doughnut',
+    data: { labels: ['5','4','3','2'],
+      datasets: [{ data: [dist['5'],dist['4'],dist['3'],dist['2']],
+        backgroundColor: ['#38a169','#3182ce','#dd6b20','#e53e3e'], borderWidth: 2, borderColor: '#fff' }] },
+    options: { responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { position: 'bottom', labels: { font: t.font, color: t.text } } } }
+  });
+}
+function drawParallelsChart() {
+  const ctx = document.getElementById('parallelsChart');
+  if (!ctx || !window._parallelsChartData) return;
+  const d = window._parallelsChartData;
+  if (window._parallelsChart) { try { window._parallelsChart.destroy(); } catch(e) {} }
+  const t = chartTheme();
+  window._parallelsChart = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: d.labels,
+      datasets: d.series.map(s => ({ label: s.name, data: s.data, backgroundColor: s.color, borderRadius: 6 })),
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { labels: { font: t.font, color: t.text } },
+        tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y ?? '—'}` } },
+      },
+      scales: {
+        y: { min: 0, max: 5, ticks: { stepSize: 0.5, font: t.font, color: t.text }, grid: { color: t.grid } },
+        x: { ticks: { font: t.font, color: t.text, maxRotation: 45 }, grid: { display: false } },
+      },
+    },
   });
 }
 /* ============================================================
@@ -3226,37 +3243,6 @@ function renderTeacherDetail(id) {
     drawTeacherDistChart(dist);
   });
 }
-function drawTeacherSubjectsChart(perSubject) {
-  destroyChart('teacherSubjects');
-  const ctx = document.getElementById('teacherSubjects');
-  if (!ctx) return;
-  const subjects = Object.keys(perSubject);
-  const values = subjects.map(sub => perSubject[sub].cnt ? +(perSubject[sub].sum / perSubject[sub].cnt).toFixed(2) : 0);
-  const t = chartTheme();
-  charts.teacherSubjects = new Chart(ctx, {
-    type: 'bar',
-    data: { labels: subjects, datasets: [{ label: 'Ср. балл', data: values,
-      backgroundColor: values.map(v => v>=4.5?'#38a169':v>=3.5?'#3182ce':v>=2.5?'#dd6b20':'#e53e3e'), borderRadius: 8 }] },
-    options: { responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { display: false } },
-      scales: { y: { min: 0, max: 5, ticks: { stepSize: .5, font: t.font, color: t.text }, grid: { color: t.grid } },
-                x: { ticks: { font: t.font, color: t.text, maxRotation: 45 }, grid: { display: false } } } }
-  });
-}
-function drawTeacherDistChart(dist) {
-  destroyChart('teacherDist');
-  const ctx = document.getElementById('teacherDist');
-  if (!ctx) return;
-  const t = chartTheme();
-  charts.teacherDist = new Chart(ctx, {
-    type: 'doughnut',
-    data: { labels: ['5','4','3','2'],
-      datasets: [{ data: [dist['5'],dist['4'],dist['3'],dist['2']],
-        backgroundColor: ['#38a169','#3182ce','#dd6b20','#e53e3e'], borderWidth: 2, borderColor: '#fff' }] },
-    options: { responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { position: 'bottom', labels: { font: t.font, color: t.text } } } }
-  });
-}
 function openEditTeacherModal(id) {
   const t = DB.getSubjectTeachersList().find(x => x.id === id);
   if (!t) return;
@@ -3595,6 +3581,7 @@ function renderBackup() {
         <button class="btn btn-primary" onclick="downloadBackupJSON()" title="Скачать">${icon('download', 14)} Скачать JSON</button>
         <button class="btn btn-outline" onclick="openImportBackupModal()" title="Загрузить">${icon('upload', 14)} Восстановить</button>
         <button class="btn btn-outline" onclick="createSnapshotManual()" title="Снапшот">${icon('save', 14)} Создать снапшот</button>
+        <button class="btn btn-outline" onclick="forceCloudSync()" title="Синхронизация с облаком">${icon('refresh', 14)} Синхронизировать с облаком</button>
       </div>
     </div>
     <div class="card">
@@ -3618,6 +3605,15 @@ function renderBackup() {
       </div>
     </div>
   `, 'backup');
+}
+function forceCloudSync() {
+  if (typeof DB.syncFromCloud === 'function') {
+    showToast('Синхронизация запущена...', 'info');
+    DB._lastCloudSync = 0; // принудительно считаем облако источником правды
+    DB.syncFromCloud();
+  } else {
+    showToast('Синхронизация недоступна', 'error');
+  }
 }
 function downloadBackupJSON() {
   const json = DB.exportAll();
@@ -4286,36 +4282,6 @@ function renderAnalyticsParallels(tabs) {
   `, 'analytics');
 
   setTimeout(() => drawParallelsChart(), 150);
-}
-function drawParallelsChart() {
-  const ctx = document.getElementById('parallelsChart');
-  if (!ctx || !window._parallelsChartData) return;
-  const d = window._parallelsChartData;
-  if (window._parallelsChart) { try { window._parallelsChart.destroy(); } catch(e) {} }
-  const t = chartTheme();
-  window._parallelsChart = new Chart(ctx, {
-    type: 'bar',
-    data: {
-      labels: d.labels,
-      datasets: d.series.map(s => ({
-        label: s.name,
-        data: s.data,
-        backgroundColor: s.color,
-        borderRadius: 6,
-      })),
-    },
-    options: {
-      responsive: true, maintainAspectRatio: false,
-      plugins: {
-        legend: { labels: { font: t.font, color: t.text } },
-        tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y ?? '—'}` } },
-      },
-      scales: {
-        y: { min: 0, max: 5, ticks: { stepSize: 0.5, font: t.font, color: t.text }, grid: { color: t.grid } },
-        x: { ticks: { font: t.font, color: t.text, maxRotation: 45 }, grid: { display: false } },
-      },
-    },
-  });
 }
 
 function renderAnalyticsMain(tabs) {
@@ -5732,6 +5698,13 @@ loadDraft();
 initMobileMode();
 UndoStack.load();
 render();
+
+// Облачная синхронизация при старте — один раз
+setTimeout(() => {
+  if (typeof DB !== 'undefined' && typeof DB.syncFromCloud === 'function') {
+    DB.syncFromCloud();
+  }
+}, 1500);
 
 window.addEventListener('load', () => {
   if ('serviceWorker' in navigator) navigator.serviceWorker.ready.then(reg => reg.update());
