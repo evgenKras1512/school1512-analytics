@@ -430,7 +430,7 @@ const DB = {
 
   // Фоновая загрузка из облака (не блокирует работу приложения)
   if (firebaseReady && firestore) {
-    firestore.collection('schools').doc('default').get()
+    firestore.collection('schools').doc('default').get({ source: 'server' })
       .then(doc => {
         if (doc.exists && doc.data().data) {
           const cloudData = doc.data().data;
