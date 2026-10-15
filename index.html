@@ -492,7 +492,7 @@ const DB = {
     if (!this._data.nextIds.subjectTeacherList) this._data.nextIds.subjectTeacherList = 1;
     if (!this._data.nextIds.noteId) this._data.nextIds.noteId = 1;
     if (!this._data.gradesHistory) this._data.gradesHistory = [];
-    if (!this._data.dashboardWidgets) this._data.dashboardWidgets = ['stats', 'classesTable', 'classesChart'];
+    if (!this._data.dashboardWidgets) this._data.dashboardWidgets = ['stats', 'health', 'classesTable', 'classesChart'];
     if (!this._data.autoReports) this._data.autoReports = { email: '', enabled: false, schedule: 'weekly', lastSent: null };
     if (!this._data.diagnosticTemplates) this._data.diagnosticTemplates = [];
     if (!this._data.taskResults) this._data.taskResults = [];
@@ -727,7 +727,7 @@ const DB = {
     const plannedDiagnostics = [];
     const classTransitions = [];
     return { users, teachers, subjectTeachersList, buildings, classes, students, subjects, grades, diagnostics, subjectTeachers,
-             gradesHistory: [], dashboardWidgets: ['stats','classesTable','classesChart'],
+             gradesHistory: [], dashboardWidgets: ['stats','health','classesTable','classesChart'],
              autoReports: { email:'', enabled:false, schedule:'weekly', lastSent:null },
              diagnosticTemplates, taskResults,
              plannedDiagnostics, classTransitions,
@@ -869,7 +869,7 @@ const DB = {
   },
   getAutoReports() { return this.load().autoReports || {}; },
   setAutoReports(patch) { const d = this.load(); d.autoReports = { ...(d.autoReports || {}), ...patch }; this.save(); },
-  getDashboardWidgets() { return this.load().dashboardWidgets || ['stats','classesTable','classesChart']; },
+  getDashboardWidgets() { return this.load().dashboardWidgets || ['stats','health','classesTable','classesChart']; },
   setDashboardWidgets(list) { const d = this.load(); d.dashboardWidgets = list; this.save(); },
   getTemplates() { return this.load().diagnosticTemplates || []; },
   addTemplate(t) { const d=this.load(); t.id=d.nextIds.templateId++; d.diagnosticTemplates.push(t); this.save(); return t; },
@@ -1059,7 +1059,53 @@ const DB = {
         quality: cnt ? Math.round(quality / cnt * 100) : null,
       };
     });
-  }
+  },
+  getHealth() {
+    const d = this.load();
+    const json = JSON.stringify(d);
+    const sizeBytes = new Blob([json]).size;
+    const sizeKB = +(sizeBytes / 1024).toFixed(1);
+    const sizeMB = +(sizeBytes / 1024 / 1024).toFixed(2);
+    const LS_LIMIT = 5 * 1024 * 1024; // 5 МБ
+    const FS_LIMIT = 1 * 1024 * 1024; // 1 МБ на документ Firestore
+    const lsPercent = Math.min(100, Math.round(sizeBytes / LS_LIMIT * 100));
+    const fsPercent = Math.min(100, Math.round(sizeBytes / FS_LIMIT * 100));
+
+    // Разбивка по сущностям
+    const breakdown = {
+      students: (d.students || []).length,
+      grades: (d.grades || []).length,
+      diagnostics: (d.diagnostics || []).length,
+      classes: (d.classes || []).length,
+      teachers: (d.teachers || []).length,
+      subjectTeachersList: (d.subjectTeachersList || []).length,
+      templates: (d.diagnosticTemplates || []).length,
+      taskResults: (d.taskResults || []).length,
+      plannedDiagnostics: (d.plannedDiagnostics || []).length,
+      users: (d.users || []).length,
+      subjects: (d.subjects || []).length,
+      snapshots: (d.snapshots || []).length,
+    };
+
+    // Прогноз: сколько ещё влезет (по самому узкому месту — Firestore)
+    const freeBytes = Math.max(0, FS_LIMIT - sizeBytes);
+    const avgGradeBytes = breakdown.grades > 0 ? sizeBytes / breakdown.grades : 100;
+    const additionalGrades = Math.floor(freeBytes / avgGradeBytes);
+
+    // Статус
+    let level = 'ok';
+    if (fsPercent >= 80 || lsPercent >= 80) level = 'warn';
+    if (fsPercent >= 95 || lsPercent >= 95) level = 'danger';
+
+    return {
+      sizeBytes, sizeKB, sizeMB,
+      lsLimit: LS_LIMIT, fsLimit: FS_LIMIT,
+      lsPercent, fsPercent,
+      breakdown, additionalGrades,
+      level,
+      firebaseReady, firebaseAuthReady,
+    };
+  } 
 };
 
 /* ============================================================
@@ -1905,6 +1951,7 @@ function renderDashboard() {
 
   const widgetMeta = {
     stats: { title: 'Статистика', icon: 'chart', render: () => renderWidgetStats(students, classes, subjects, diags) },
+    health: { title: 'Здоровье системы', icon: 'database', render: () => renderWidgetHealth() },
     classesTable: { title: 'Классы (таблица)', icon: 'grid', render: () => renderWidgetClassesTable(students, classes, subjects) },
     classesChart: { title: 'Средний балл по классам', icon: 'bar-chart', render: () => renderWidgetClassesChart(classes, students, subjects) },
     risksChart: { title: 'Прогноз риска', icon: 'alert', render: () => renderWidgetRisks(students) },
@@ -1952,6 +1999,65 @@ function renderWidgetStats(students, classes, subjects, diags) {
     ${highRisk > 0 ? `<div class="stat-card" style="border-left-color:var(--danger);">
       <div class="num" style="color:var(--danger);">${highRisk}</div><div class="lbl">В группе риска</div></div>` : ''}
   </div>`;
+}
+function renderWidgetHealth() {
+  const h = DB.getHealth();
+  const levelColor = h.level === 'ok' ? 'var(--success)' : h.level === 'warn' ? 'var(--warning)' : 'var(--danger)';
+  const levelText = h.level === 'ok' ? 'Всё в порядке' : h.level === 'warn' ? 'Приближается к лимиту' : 'Критично — нужно действие';
+  const levelIcon = h.level === 'ok' ? '🟢' : h.level === 'warn' ? '🟡' : '🔴';
+
+  const barColor = (percent) => percent >= 95 ? 'var(--danger)' : percent >= 80 ? 'var(--warning)' : 'var(--success)';
+
+  const fsStatus = firebaseReady && firebaseAuthReady
+    ? `<span class="badge badge-green" style="font-size:11px;">☁️ Синхронизируется</span>`
+    : firebaseReady
+    ? `<span class="badge badge-orange" style="font-size:11px;">⏳ Авторизация...</span>`
+    : `<span class="badge badge-gray" style="font-size:11px;">📴 Только локально</span>`;
+
+  return `
+    <div style="display:flex;flex-direction:column;gap:14px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <div>
+          <div style="font-size:24px;font-weight:800;color:${levelColor};">${h.sizeMB < 0.01 ? h.sizeKB + ' КБ' : h.sizeMB + ' МБ'}</div>
+          <div class="muted" style="font-size:11px;">${levelIcon} ${levelText}</div>
+        </div>
+        <div style="text-align:right;">${fsStatus}</div>
+      </div>
+
+      <div>
+        <div style="display:flex;justify-content:space-between;font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:4px;">
+          <span>📴 LocalStorage</span>
+          <span style="color:${barColor(h.lsPercent)};">${h.lsPercent}%</span>
+        </div>
+        <div style="height:8px;background:#e2e8f0;border-radius:4px;overflow:hidden;">
+          <div style="width:${h.lsPercent}%;height:100%;background:${barColor(h.lsPercent)};transition:width .3s;"></div>
+        </div>
+        <div class="muted" style="font-size:10px;margin-top:2px;">Лимит браузера: 5 МБ</div>
+      </div>
+
+      <div>
+        <div style="display:flex;justify-content:space-between;font-size:12px;font-weight:600;color:var(--text-2);margin-bottom:4px;">
+          <span>☁️ Firestore</span>
+          <span style="color:${barColor(h.fsPercent)};">${h.fsPercent}%</span>
+        </div>
+        <div style="height:8px;background:#e2e8f0;border-radius:4px;overflow:hidden;">
+          <div style="width:${h.fsPercent}%;height:100%;background:${barColor(h.fsPercent)};transition:width .3s;"></div>
+        </div>
+        <div class="muted" style="font-size:10px;margin-top:2px;">Лимит документа: 1 МБ</div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;padding-top:10px;border-top:1px solid var(--border);font-size:11px;">
+        <div><span class="muted">Учеников:</span> <b>${h.breakdown.students}</b></div>
+        <div><span class="muted">Оценок:</span> <b>${h.breakdown.grades}</b></div>
+        <div><span class="muted">Диагностик:</span> <b>${h.breakdown.diagnostics}</b></div>
+        <div><span class="muted">Классов:</span> <b>${h.breakdown.classes}</b></div>
+      </div>
+
+      <button class="btn btn-outline btn-sm" onclick="go('backup')" style="justify-content:center;">
+        Подробнее
+      </button>
+    </div>
+  `;
 }
 function renderWidgetClassesTable(students, classes, subjects) {
   const rows = classes.map(c => {
@@ -2014,10 +2120,11 @@ function renderWidgetTopStudents(students, subjects) {
 }
 function removeWidget(key) { DB.setDashboardWidgets(DB.getDashboardWidgets().filter(k => k !== key)); renderDashboard(); }
 function addWidget(key) { const w = DB.getDashboardWidgets(); if (!w.includes(key)) w.push(key); DB.setDashboardWidgets(w); renderDashboard(); }
-function resetWidgets() { DB.setDashboardWidgets(['stats','classesTable','classesChart']); renderDashboard(); }
+function resetWidgets() { DB.setDashboardWidgets(['stats','health','classesTable','classesChart']); renderDashboard(); }
 function openWidgetsModal() {
   const all = {
     stats: { title: 'Статистика', icon: 'chart' },
+    health: { title: 'Здоровье системы', icon: 'database' },
     classesTable: { title: 'Классы (таблица)', icon: 'grid' },
     classesChart: { title: 'Средний балл по классам', icon: 'bar-chart' },
     risksChart: { title: 'Прогноз риска', icon: 'alert' },
@@ -3214,11 +3321,12 @@ function renderTeacherDetail(id) {
       </div>
     </div>
     <div class="stats-grid">
-      <div class="stat-card"><div class="num">${assignments.length}</div><div class="lbl">Назначений</div></div>
-      <div class="stat-card"><div class="num">${Object.keys(perSubject).length}</div><div class="lbl">Предметов</div></div>
-      <div class="stat-card"><div class="num">${totalCnt}</div><div class="lbl">Оценок</div></div>
-      <div class="stat-card"><div class="num">${overallAvg}</div><div class="lbl">Средний балл</div></div>
+      <div class="stat-card"><div class="num">${sizeMB} МБ</div><div class="lbl">Размер</div></div>
+      <div class="stat-card"><div class="num">${DB.getStudents().length}</div><div class="lbl">Учеников</div></div>
+      <div class="stat-card"><div class="num">${DB.getGrades().length}</div><div class="lbl">Оценок</div></div>
+      <div class="stat-card"><div class="num">${snapshots.length}</div><div class="lbl">Снапшотов</div></div>
     </div>
+    ${renderHealthPanel()}
     <div class="card"><h2>${icon('bar-chart', 18)} Средний балл по предметам</h2><div class="chart-box"><canvas id="teacherSubjects"></canvas></div></div>
     <div class="card"><h2>${icon('chart', 18)} Распределение оценок</h2><div class="chart-box"><canvas id="teacherDist"></canvas></div></div>
     <div class="card"><h2>${icon('grid', 18)} Назначения по предметам</h2>
@@ -3555,6 +3663,117 @@ function delUser(id) {
 /* ============================================================
    БЭКАП
    ============================================================ */
+function renderHealthPanel() {
+  const h = DB.getHealth();
+  const levelColor = h.level === 'ok' ? 'var(--success)' : h.level === 'warn' ? 'var(--warning)' : 'var(--danger)';
+  const levelText = h.level === 'ok' ? 'Система работает штатно' : h.level === 'warn' ? 'Приближается к лимиту хранилища' : 'Критично: скоро данные не сохранятся';
+  const barColor = (percent) => percent >= 95 ? 'var(--danger)' : percent >= 80 ? 'var(--warning)' : 'var(--success)';
+
+  const breakdownRows = [
+    { icon: '👥', label: 'Ученики', key: 'students' },
+    { icon: '📝', label: 'Оценки', key: 'grades' },
+    { icon: '📋', label: 'Диагностики', key: 'diagnostics' },
+    { icon: '📊', label: 'Результаты заданий', key: 'taskResults' },
+    { icon: '🗂️', label: 'Шаблоны', key: 'templates' },
+    { icon: '🏫', label: 'Классы', key: 'classes' },
+    { icon: '👨‍🏫', label: 'Учителя-предметники', key: 'subjectTeachersList' },
+    { icon: '📅', label: 'Планируемые работы', key: 'plannedDiagnostics' },
+    { icon: '👤', label: 'Пользователи', key: 'users' },
+    { icon: '📚', label: 'Предметы', key: 'subjects' },
+    { icon: '💾', label: 'Снапшоты', key: 'snapshots' },
+  ].map(r => `<tr>
+    <td style="font-size:14px;">${r.icon} ${r.label}</td>
+    <td class="text-right"><b>${h.breakdown[r.key]}</b></td>
+  </tr>`).join('');
+
+  let recommendations = '';
+  if (h.level === 'danger') {
+    recommendations = `
+      <div class="alert alert-error">
+        <b>⚠️ Критическая ситуация</b><br>
+        Данные занимают ${h.fsPercent}% от лимита Firestore. Скоро новые записи перестанут сохраняться в облако.
+        <br><br>
+        <b>Что делать:</b>
+        <ul style="margin-left:20px;margin-top:8px;">
+          <li>Создайте снапшот для архива</li>
+          <li>Скачайте резервную копию JSON</li>
+          <li>Обратитесь к разработчику для перехода на разбиение по документам</li>
+        </ul>
+      </div>
+    `;
+  } else if (h.level === 'warn') {
+    recommendations = `
+      <div class="alert alert-warn">
+        <b>🟡 Внимание</b><br>
+        Данные занимают ${h.fsPercent}% от лимита Firestore (${h.sizeMB} МБ из 1 МБ).
+        При текущем темпе можно добавить ещё примерно <b>${h.additionalGrades.toLocaleString('ru-RU')}</b> оценок.
+        <br><br>
+        <b>Рекомендация:</b> сделайте резервную копию и создайте снапшот, чтобы потом можно было откатиться.
+      </div>
+    `;
+  } else {
+    recommendations = `
+      <div class="alert alert-success">
+        <b>🟢 Всё в порядке</b><br>
+        Данные занимают ${h.fsPercent}% от лимита Firestore. Можно добавить ещё примерно <b>${h.additionalGrades.toLocaleString('ru-RU')}</b> оценок.
+      </div>
+    `;
+  }
+
+  return `
+    <div class="card">
+      <div class="row-flex" style="justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:16px;">
+        <div>
+          <h2 style="margin:0;">${icon('database', 18)} Здоровье системы</h2>
+          <div class="muted" style="margin-top:4px;">Текущий размер базы данных и свободное место</div>
+        </div>
+        <div style="text-align:right;">
+          <div style="font-size:32px;font-weight:800;color:${levelColor};line-height:1;">${h.sizeMB < 0.01 ? h.sizeKB + ' КБ' : h.sizeMB + ' МБ'}</div>
+          <div class="muted" style="font-size:12px;">${levelText}</div>
+        </div>
+      </div>
+
+      ${recommendations}
+
+      <div class="form-grid" style="margin-bottom:20px;">
+        <div>
+          <div style="display:flex;justify-content:space-between;font-size:13px;font-weight:600;color:var(--text-2);margin-bottom:6px;">
+            <span>📴 LocalStorage</span>
+            <span style="color:${barColor(h.lsPercent)};">${h.lsPercent}%</span>
+          </div>
+          <div style="height:10px;background:#e2e8f0;border-radius:5px;overflow:hidden;">
+            <div style="width:${h.lsPercent}%;height:100%;background:${barColor(h.lsPercent)};transition:width .3s;"></div>
+          </div>
+          <div class="muted" style="font-size:11px;margin-top:4px;">Лимит браузера: 5 МБ</div>
+        </div>
+        <div>
+          <div style="display:flex;justify-content:space-between;font-size:13px;font-weight:600;color:var(--text-2);margin-bottom:6px;">
+            <span>☁️ Firestore</span>
+            <span style="color:${barColor(h.fsPercent)};">${h.fsPercent}%</span>
+          </div>
+          <div style="height:10px;background:#e2e8f0;border-radius:5px;overflow:hidden;">
+            <div style="width:${h.fsPercent}%;height:100%;background:${barColor(h.fsPercent)};transition:width .3s;"></div>
+          </div>
+          <div class="muted" style="font-size:11px;margin-top:4px;">Лимит документа: 1 МБ</div>
+        </div>
+      </div>
+
+      <h3 style="margin-top:20px;">Что хранится в базе</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Сущность</th><th class="text-right">Количество</th></tr></thead>
+          <tbody>${breakdownRows}</tbody>
+        </table>
+      </div>
+
+      <div style="margin-top:16px;padding:12px 16px;background:#f8fafc;border-radius:8px;border-left:3px solid var(--primary);font-size:13px;color:var(--text-2);line-height:1.5;">
+        <b>Что это значит:</b><br>
+        LocalStorage — быстрое хранилище в браузере, лимит 5 МБ. Firestore — облако, но один документ не больше 1 МБ.
+        Когда счётчик дойдёт до 80% — сделайте резервную копию. До 95% — обратитесь к разработчику, чтобы перейти на разбиение по нескольким документам.
+      </div>
+    </div>
+  `;
+}
 function renderBackup() {
   const d = DB.load();
   const snapshots = d.snapshots || [];
