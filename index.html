@@ -17,6 +17,9 @@
 <title>Школьная аналитика</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-auth-compat.js"></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 :root{--bg-body:#f4f7fa;--bg-card:#fff;--bg-hover:#eef4f9;--bg-input:#f8fafc;--border:#d9e4ec;--border-strong:#b8cbd9;--text:#1a2b3c;--text-2:#33475b;--text-muted:#6a7f94;--text-disabled:#9aacbc;--primary:#04558a;--primary-dark:#033f66;--primary-light:#398ec6;--primary-soft:#e6f0f7;--accent:#1893d2;--accent-dark:#0f75a8;--success:#38a169;--success-dark:#276749;--warning:#dd6b20;--warning-dark:#c05621;--danger:#c53030;--danger-dark:#9b2c2c;--purple:#805ad5;--purple-dark:#6b46c1;--shadow:0 1px 6px rgba(4,85,138,.08);--shadow-md:0 4px 16px rgba(4,85,138,.12);--shadow-lg:0 20px 50px rgba(4,85,138,.25);--radius:10px;--radius-sm:6px;--radius-lg:14px}
@@ -380,6 +383,37 @@ updateOnlineStatus();
 /* ============================================================
    БАЗА ДАННЫХ
    ============================================================ */
+/* ============================================================
+   FIREBASE — облачное хранилище
+   ============================================================ */
+const firebaseConfig = {
+  apiKey: "AIzaSyDskguNmb_FNqVw2m7S6ayRxoflvGS4X3o",
+  authDomain: "school1512-analytics.firebaseapp.com",
+  projectId: "school1512-analytics",
+  storageBucket: "school1512-analytics.appspot.com",
+  messagingSenderId: "652044886084",
+  appId: "1:652044886084:web:168fae3bbe8e51dac6dc11"
+};
+
+let firebaseApp = null;
+let firestore = null;
+let firebaseReady = false;
+
+try {
+  firebaseApp = firebase.initializeApp(firebaseConfig);
+  firestore = firebase.firestore();
+  
+  // Офлайн-кеш — данные будут работать без интернета
+  firestore.enablePersistence({ synchronizeTabs: true })
+    .then(() => console.log('[Firebase] Офлайн-кеш включён'))
+    .catch(err => console.warn('[Firebase] Офлайн-кеш недоступен:', err.code));
+  
+  firebaseReady = true;
+  console.log('[Firebase] Инициализирован');
+} catch (err) {
+  console.warn('[Firebase] Не удалось инициализировать:', err);
+  firebaseReady = false;
+}
 const DB = {
   _key: 'school_analytics_db_v5',
   _data: null,
