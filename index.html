@@ -246,7 +246,7 @@ html[data-theme="dark"] .diag-cell-fail{background:rgba(229,62,62,.25);color:#fc
 
 <script>
 /* ============================================================
-   ШКОЛЬНАЯ АНАЛИТИКА — единый скрипт с облачной синхронизацией
+   ШКОЛЬНАЯ АНАЛИТИКА — единый скрипт с разбиением по документам
    ============================================================ */
 const PERIODS = ['I четверть','II четверть','III четверть','IV четверть','Год'];
 const GRADE_TYPES = ['текущая','промежуточная','итоговая'];
@@ -381,7 +381,7 @@ window.addEventListener('offline', updateOnlineStatus);
 updateOnlineStatus();
 
 /* ============================================================
-   FIREBASE — облачное хранилище
+   FIREBASE — облачное хранилище (разбито на документы)
    ============================================================ */
 const firebaseConfig = {
   apiKey: "AIzaSyDskguNmb_FNqVw2m7S6ayRxoflvGS4X3o",
@@ -408,13 +408,15 @@ try {
   firebaseReady = true;
   console.log('[Firebase] Инициализирован');
 
-  // Анонимный вход
   firebase.auth().signInAnonymously()
     .then(() => {
       firebaseAuthReady = true;
       console.log('[Firebase] Анонимный вход выполнен');
-      // Как только авторизация готова — сразу синхронизируем
-      setTimeout(() => DB.syncFromCloud(), 300);
+      setTimeout(() => {
+        if (typeof DB !== 'undefined') {
+          DB.migrateCloudToSplit().then(() => DB.syncFromCloud());
+        }
+      }, 500);
     })
     .catch(err => console.warn('[Firebase] Ошибка анонимного входа:', err));
 } catch (err) {
@@ -432,51 +434,258 @@ const DB = {
   load() {
     if (this._data) return this._data;
     const raw = localStorage.getItem(this._key);
-    if (raw) { this._data = JSON.parse(raw); this._migrate(); this.save(); }
+    if (raw) { this._data = JSON.parse(raw); this._migrate(); }
     else { this._data = this.seed(); this.save(); }
     return this._data;
   },
 
-  // Отдельный метод: загрузка данных из облака
+  /* ---------- ОБЛАКО: СОХРАНЕНИЕ (разбито на документы) ---------- */
+  async _saveToCloud() {
+    if (!firebaseReady || !firestore || !firebaseAuthReady) return;
+    const d = this._data;
+    const now = firebase.firestore.FieldValue.serverTimestamp();
+
+    // Годы из оценок и диагностик
+    const yearsSet = new Set();
+    (d.grades || []).forEach(g => yearsSet.add(g.year || '2024-2025'));
+    (d.diagnostics || []).forEach(x => yearsSet.add((x.date || '').slice(0, 4) || 'unknown'));
+    (d.taskResults || []).forEach(r => yearsSet.add((r.date || '').slice(0, 4) || 'unknown'));
+    const years = [...yearsSet].sort();
+
+    // Группировка
+    const gradesByYear = {};
+    const diagnosticsByYear = {};
+    const taskResultsByYear = {};
+    years.forEach(y => {
+      gradesByYear[y] = (d.grades || []).filter(g => (g.year || '2024-2025') === y);
+      diagnosticsByYear[y] = (d.diagnostics || []).filter(x => {
+        const yx = (x.date || '').slice(0, 4);
+        return yx === y || (y === 'unknown' && !yx);
+      });
+      taskResultsByYear[y] = (d.taskResults || []).filter(r => {
+        const yx = (r.date || '').slice(0, 4);
+        return yx === y || (y === 'unknown' && !yx);
+      });
+    });
+
+    const batch = firestore.batch();
+
+    // meta
+    batch.set(firestore.collection('schools').doc('meta'), {
+      users: d.users || [],
+      teachers: d.teachers || [],
+      subjectTeachersList: d.subjectTeachersList || [],
+      subjectTeachers: d.subjectTeachers || [],
+      buildings: d.buildings || [],
+      classes: d.classes || [],
+      subjects: d.subjects || [],
+      nextIds: d.nextIds || {},
+      updatedAt: now,
+      version: 6,
+    });
+
+    // students
+    batch.set(firestore.collection('schools').doc('students'), {
+      students: d.students || [],
+      updatedAt: now,
+    });
+
+    // templates
+    batch.set(firestore.collection('schools').doc('templates'), {
+      templates: d.diagnosticTemplates || [],
+      updatedAt: now,
+    });
+
+    // config
+    batch.set(firestore.collection('schools').doc('config'), {
+      autoReports: d.autoReports || {},
+      dashboardWidgets: d.dashboardWidgets || [],
+      plannedDiagnostics: d.plannedDiagnostics || [],
+      classTransitions: d.classTransitions || [],
+      gradesHistory: d.gradesHistory || [],
+      snapshots: (d.snapshots || []).slice(0, 3),
+      updatedAt: now,
+    });
+
+    // grades/diagnostics/taskResults по годам
+    years.forEach(y => {
+      batch.set(firestore.collection('schools').doc('grades-' + y), {
+        grades: gradesByYear[y] || [],
+        year: y,
+        updatedAt: now,
+      });
+      batch.set(firestore.collection('schools').doc('diagnostics-' + y), {
+        diagnostics: diagnosticsByYear[y] || [],
+        year: y,
+        updatedAt: now,
+      });
+      batch.set(firestore.collection('schools').doc('taskResults-' + y), {
+        taskResults: taskResultsByYear[y] || [],
+        year: y,
+        updatedAt: now,
+      });
+    });
+
+    await batch.commit();
+    this._lastCloudSync = Date.now();
+    console.log('[Firebase] Сохранено в облако: meta + students + templates + config + ' + (years.length * 3) + ' годовых документов');
+  },
+
+  /* ---------- ОБЛАКО: ЗАГРУЗКА (собираем из документов) ---------- */
   async syncFromCloud() {
     if (!firebaseReady || !firestore || !firebaseAuthReady) {
       console.log('[Firebase] syncFromCloud отложен: Firebase не готов');
       return;
     }
     try {
-      const doc = await firestore.collection('schools').doc('default').get({ source: 'server' });
-      if (!doc.exists) {
+      const snapshot = await firestore.collection('schools').get({ source: 'server' });
+      if (snapshot.empty) {
         console.log('[Firebase] В облаке нет данных — первая синхронизация');
         return;
       }
-      const cloudData = doc.data().data;
-      if (!cloudData) {
-        console.log('[Firebase] В облаке пустое поле data');
-        return;
-      }
-      const cloudTime = doc.data().updatedAt ? doc.data().updatedAt.toMillis() : 0;
+
+      const result = {
+        users: [], teachers: [], subjectTeachersList: [], subjectTeachers: [],
+        buildings: [], classes: [], subjects: [], students: [],
+        grades: [], diagnostics: [], taskResults: [], diagnosticTemplates: [],
+        autoReports: {}, dashboardWidgets: [], plannedDiagnostics: [], classTransitions: [],
+        gradesHistory: [], snapshots: [], nextIds: {},
+      };
+      let maxCloudTime = 0;
+      let docsCount = 0;
+
+      snapshot.forEach(doc => {
+        const id = doc.id;
+        const data = doc.data();
+        docsCount++;
+        if (data.updatedAt) {
+          const t = data.updatedAt.toMillis();
+          if (t > maxCloudTime) maxCloudTime = t;
+        }
+
+        if (id === 'meta') {
+          result.users = data.users || [];
+          result.teachers = data.teachers || [];
+          result.subjectTeachersList = data.subjectTeachersList || [];
+          result.subjectTeachers = data.subjectTeachers || [];
+          result.buildings = data.buildings || [];
+          result.classes = data.classes || [];
+          result.subjects = data.subjects || [];
+          result.nextIds = data.nextIds || {};
+        }
+        else if (id === 'students') result.students = data.students || [];
+        else if (id === 'templates') result.diagnosticTemplates = data.templates || [];
+        else if (id === 'config') {
+          result.autoReports = data.autoReports || {};
+          result.dashboardWidgets = data.dashboardWidgets || [];
+          result.plannedDiagnostics = data.plannedDiagnostics || [];
+          result.classTransitions = data.classTransitions || [];
+          result.gradesHistory = data.gradesHistory || [];
+          result.snapshots = data.snapshots || [];
+        }
+        else if (id.startsWith('grades-')) result.grades = result.grades.concat(data.grades || []);
+        else if (id.startsWith('diagnostics-')) result.diagnostics = result.diagnostics.concat(data.diagnostics || []);
+        else if (id.startsWith('taskResults-')) result.taskResults = result.taskResults.concat(data.taskResults || []);
+        // 'default' (старый формат) игнорируем — его обработает миграция
+      });
+
       const localTime = this._lastCloudSync || 0;
+      console.log('[Firebase] Облако:', new Date(maxCloudTime).toLocaleString('ru-RU'));
+      console.log('[Firebase] Локально:', localTime ? new Date(localTime).toLocaleString('ru-RU') : 'никогда');
+      console.log('[Firebase] Документов получено:', docsCount);
 
-      console.log('[Firebase] Облако:', new Date(cloudTime).toLocaleString('ru-RU'));
-      console.log('[Firebase] Локально синхронизировано в:', localTime ? new Date(localTime).toLocaleString('ru-RU') : 'никогда');
-
-      // Если в облаке новее или локально ещё не синхронизировались
-      if (cloudTime > localTime || localTime === 0) {
-        this._data = cloudData;
+      if (maxCloudTime > localTime || localTime === 0) {
+        const oldNextIds = this._data ? this._data.nextIds : {};
+        this._data = {
+          ...this._data,
+          ...result,
+          nextIds: Object.keys(result.nextIds).length ? result.nextIds : oldNextIds,
+        };
         this._migrate();
         localStorage.setItem(this._key, JSON.stringify(this._data));
-        this._lastCloudSync = cloudTime;
-        console.log('[Firebase] ✅ Данные загружены из облака');
+        this._lastCloudSync = maxCloudTime;
+        console.log('[Firebase] ✅ Данные собраны из', docsCount, 'документов');
         if (typeof render === 'function' && typeof SESSION !== 'undefined' && SESSION) {
           render();
           showToast('Данные обновлены из облака', 'success', 2000);
         }
       } else {
-        console.log('[Firebase] Локальные данные новее или равны — оставляем');
+        console.log('[Firebase] Локальные данные новее — оставляем');
       }
     } catch (err) {
       console.warn('[Firebase] Ошибка syncFromCloud:', err.code || err.message);
     }
+  },
+
+  /* ---------- МИГРАЦИЯ: старый 'default' → новая схема ---------- */
+  async migrateCloudToSplit() {
+    if (!firebaseReady || !firestore || !firebaseAuthReady) return;
+    try {
+      const oldDoc = await firestore.collection('schools').doc('default').get({ source: 'server' });
+      if (!oldDoc.exists) {
+        console.log('[Firebase] Миграция не нужна: старого документа default нет');
+        return;
+      }
+      const oldData = oldDoc.data().data;
+      if (!oldData) {
+        console.log('[Firebase] Старый документ пуст');
+        return;
+      }
+      console.log('[Firebase] Начинаю миграцию со старого формата...');
+      this._data = oldData;
+      this._migrate();
+      await this._saveToCloud();
+      await firestore.collection('schools').doc('default').delete();
+      console.log('[Firebase] ✅ Миграция завершена. Старый документ удалён.');
+      showToast('Данные переведены на новую схему хранения', 'success', 4000);
+    } catch (err) {
+      console.warn('[Firebase] Ошибка миграции:', err.code || err.message);
+    }
+  },
+
+  /* ---------- ЗДОРОВЬЕ СИСТЕМЫ ---------- */
+  getHealth() {
+    const d = this.load();
+    const json = JSON.stringify(d);
+    const sizeBytes = new Blob([json]).size;
+    const sizeKB = +(sizeBytes / 1024).toFixed(1);
+    const sizeMB = +(sizeBytes / 1024 / 1024).toFixed(2);
+    const LS_LIMIT = 5 * 1024 * 1024;
+    const FS_LIMIT = 1 * 1024 * 1024;
+    const lsPercent = Math.min(100, Math.round(sizeBytes / LS_LIMIT * 100));
+    const fsPercent = Math.min(100, Math.round(sizeBytes / FS_LIMIT * 100));
+
+    const breakdown = {
+      students: (d.students || []).length,
+      grades: (d.grades || []).length,
+      diagnostics: (d.diagnostics || []).length,
+      classes: (d.classes || []).length,
+      teachers: (d.teachers || []).length,
+      subjectTeachersList: (d.subjectTeachersList || []).length,
+      templates: (d.diagnosticTemplates || []).length,
+      taskResults: (d.taskResults || []).length,
+      plannedDiagnostics: (d.plannedDiagnostics || []).length,
+      users: (d.users || []).length,
+      subjects: (d.subjects || []).length,
+      snapshots: (d.snapshots || []).length,
+    };
+
+    const freeBytes = Math.max(0, FS_LIMIT - sizeBytes);
+    const avgGradeBytes = breakdown.grades > 0 ? sizeBytes / breakdown.grades : 100;
+    const additionalGrades = Math.floor(freeBytes / avgGradeBytes);
+
+    let level = 'ok';
+    if (fsPercent >= 80 || lsPercent >= 80) level = 'warn';
+    if (fsPercent >= 95 || lsPercent >= 95) level = 'danger';
+
+    return {
+      sizeBytes, sizeKB, sizeMB,
+      lsLimit: LS_LIMIT, fsLimit: FS_LIMIT,
+      lsPercent, fsPercent,
+      breakdown, additionalGrades,
+      level,
+      firebaseReady, firebaseAuthReady,
+    };
   },
 
   _migrate() {
@@ -575,18 +784,9 @@ const DB = {
 
   save() {
     localStorage.setItem(this._key, JSON.stringify(this._data));
-    // Фоновая отправка в облако
     if (firebaseReady && firestore && firebaseAuthReady) {
-      firestore.collection('schools').doc('default').set({
-        data: this._data,
-        updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
-        version: 5
-      }).then(() => {
-        // Запоминаем, что локально уже синхронизировано
-        this._lastCloudSync = Date.now();
-        console.log('[Firebase] Сохранено в облако');
-      }).catch(err => {
-        console.warn('[Firebase] Ошибка сохранения:', err.code || err.message);
+      this._saveToCloud().catch(err => {
+        console.warn('[Firebase] Ошибка сохранения в облако:', err.code || err.message);
       });
     }
   },
@@ -1059,53 +1259,7 @@ const DB = {
         quality: cnt ? Math.round(quality / cnt * 100) : null,
       };
     });
-  },
-  getHealth() {
-    const d = this.load();
-    const json = JSON.stringify(d);
-    const sizeBytes = new Blob([json]).size;
-    const sizeKB = +(sizeBytes / 1024).toFixed(1);
-    const sizeMB = +(sizeBytes / 1024 / 1024).toFixed(2);
-    const LS_LIMIT = 5 * 1024 * 1024; // 5 МБ
-    const FS_LIMIT = 1 * 1024 * 1024; // 1 МБ на документ Firestore
-    const lsPercent = Math.min(100, Math.round(sizeBytes / LS_LIMIT * 100));
-    const fsPercent = Math.min(100, Math.round(sizeBytes / FS_LIMIT * 100));
-
-    // Разбивка по сущностям
-    const breakdown = {
-      students: (d.students || []).length,
-      grades: (d.grades || []).length,
-      diagnostics: (d.diagnostics || []).length,
-      classes: (d.classes || []).length,
-      teachers: (d.teachers || []).length,
-      subjectTeachersList: (d.subjectTeachersList || []).length,
-      templates: (d.diagnosticTemplates || []).length,
-      taskResults: (d.taskResults || []).length,
-      plannedDiagnostics: (d.plannedDiagnostics || []).length,
-      users: (d.users || []).length,
-      subjects: (d.subjects || []).length,
-      snapshots: (d.snapshots || []).length,
-    };
-
-    // Прогноз: сколько ещё влезет (по самому узкому месту — Firestore)
-    const freeBytes = Math.max(0, FS_LIMIT - sizeBytes);
-    const avgGradeBytes = breakdown.grades > 0 ? sizeBytes / breakdown.grades : 100;
-    const additionalGrades = Math.floor(freeBytes / avgGradeBytes);
-
-    // Статус
-    let level = 'ok';
-    if (fsPercent >= 80 || lsPercent >= 80) level = 'warn';
-    if (fsPercent >= 95 || lsPercent >= 95) level = 'danger';
-
-    return {
-      sizeBytes, sizeKB, sizeMB,
-      lsLimit: LS_LIMIT, fsLimit: FS_LIMIT,
-      lsPercent, fsPercent,
-      breakdown, additionalGrades,
-      level,
-      firebaseReady, firebaseAuthReady,
-    };
-  } 
+  }
 };
 
 /* ============================================================
@@ -1526,18 +1680,10 @@ function renderNav(active) {
   let openKey = null;
   let closeTimer = null;
 
-  function getGroups() {
-    return Array.from(document.querySelectorAll('.sa-nav-group[data-sa-group]'));
-  }
-  function getToggle(key) {
-    return document.querySelector(`[data-sa-toggle="${key}"]`);
-  }
-  function getGroup(key) {
-    return document.querySelector(`.sa-nav-group[data-sa-group="${key}"]`);
-  }
-  function getPortal() {
-    return document.getElementById('sa-nav-portal');
-  }
+  function getGroups() { return Array.from(document.querySelectorAll('.sa-nav-group[data-sa-group]')); }
+  function getToggle(key) { return document.querySelector(`[data-sa-toggle="${key}"]`); }
+  function getGroup(key) { return document.querySelector(`.sa-nav-group[data-sa-group="${key}"]`); }
+  function getPortal() { return document.getElementById('sa-nav-portal'); }
 
   function ensurePortal() {
     let p = getPortal();
@@ -1618,43 +1764,19 @@ function renderNav(active) {
 
   document.addEventListener('click', e => {
     const toggle = e.target.closest('[data-sa-toggle]');
-    if (toggle) {
-      e.preventDefault();
-      e.stopPropagation();
-      window.saNavToggle(toggle.dataset.saToggle);
-      return;
-    }
+    if (toggle) { e.preventDefault(); e.stopPropagation(); window.saNavToggle(toggle.dataset.saToggle); return; }
     const item = e.target.closest('#sa-nav-portal [data-sa-hash]');
-    if (item) {
-      e.preventDefault();
-      const hash = item.dataset.saHash;
-      window.saNavClose();
-      location.hash = hash;
-      return;
-    }
+    if (item) { e.preventDefault(); const hash = item.dataset.saHash; window.saNavClose(); location.hash = hash; return; }
     const single = e.target.closest('.sa-nav-single[data-sa-hash]');
-    if (single) {
-      e.preventDefault();
-      window.saNavClose();
-      location.hash = single.dataset.saHash;
-      return;
-    }
-    if (!e.target.closest('.sa-nav-group') && !e.target.closest('#sa-nav-portal')) {
-      window.saNavClose();
-    }
+    if (single) { e.preventDefault(); window.saNavClose(); location.hash = single.dataset.saHash; return; }
+    if (!e.target.closest('.sa-nav-group') && !e.target.closest('#sa-nav-portal')) window.saNavClose();
   });
 
   document.addEventListener('mouseover', e => {
     if (!HOVER_MQ.matches) return;
     const toggle = e.target.closest('[data-sa-toggle]');
-    if (toggle) {
-      clearTimeout(closeTimer);
-      window.saNavOpen(toggle.dataset.saToggle);
-      return;
-    }
-    if (e.target.closest('#sa-nav-portal')) {
-      clearTimeout(closeTimer);
-    }
+    if (toggle) { clearTimeout(closeTimer); window.saNavOpen(toggle.dataset.saToggle); return; }
+    if (e.target.closest('#sa-nav-portal')) clearTimeout(closeTimer);
   });
 
   document.addEventListener('mouseout', e => {
@@ -1669,13 +1791,8 @@ function renderNav(active) {
 
   window.addEventListener('hashchange', () => window.saNavClose());
   window.addEventListener('resize', () => window.saNavClose());
-  window.addEventListener('scroll', () => {
-    if (openKey) window.saNavClose();
-  }, { passive: true, capture: true });
-
-  document.addEventListener('keydown', e => {
-    if (e.key === 'Escape') window.saNavClose();
-  });
+  window.addEventListener('scroll', () => { if (openKey) window.saNavClose(); }, { passive: true, capture: true });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') window.saNavClose(); });
 })();
 
 /* ============================================================
@@ -1986,6 +2103,7 @@ function renderDashboard() {
   `, 'dashboard');
   setTimeout(initWidgetDrag, 50);
 }
+
 function renderWidgetStats(students, classes, subjects, diags) {
   const teachersList = DB.getSubjectTeachersList().filter(t =>
     DB.getSubjectTeachers().some(st => st.teacherId === t.id && classes.some(c => c.id === st.classId)));
@@ -2000,6 +2118,7 @@ function renderWidgetStats(students, classes, subjects, diags) {
       <div class="num" style="color:var(--danger);">${highRisk}</div><div class="lbl">В группе риска</div></div>` : ''}
   </div>`;
 }
+
 function renderWidgetHealth() {
   const h = DB.getHealth();
   const levelColor = h.level === 'ok' ? 'var(--success)' : h.level === 'warn' ? 'var(--warning)' : 'var(--danger)';
@@ -2059,6 +2178,7 @@ function renderWidgetHealth() {
     </div>
   `;
 }
+
 function renderWidgetClassesTable(students, classes, subjects) {
   const rows = classes.map(c => {
     const sts = students.filter(s => s.classId === c.id);
@@ -2342,25 +2462,11 @@ function applyImportStudents() {
     let cid = null;
     if (s.className) {
       const existing = DB.getClasses().find(c => c.name.toLowerCase() === s.className.toLowerCase());
-      if (existing) {
-        cid = existing.id;
-      } else {
-        const newC = DB.findOrCreateClass(s.className, buildingId);
-        cid = newC.id;
-        createdClasses++;
-      }
-    } else if (defaultClassId) {
-      cid = defaultClassId;
-    } else {
-      return;
-    }
-    DB.addStudent({
-      lastName: s.lastName,
-      firstName: s.firstName,
-      middleName: s.middleName,
-      birthDate: s.birthDate,
-      classId: cid,
-    });
+      if (existing) { cid = existing.id; }
+      else { const newC = DB.findOrCreateClass(s.className, buildingId); cid = newC.id; createdClasses++; }
+    } else if (defaultClassId) { cid = defaultClassId; }
+    else return;
+    DB.addStudent({ lastName: s.lastName, firstName: s.firstName, middleName: s.middleName, birthDate: s.birthDate, classId: cid });
     addedStudents++;
   });
 
@@ -2746,7 +2852,6 @@ function openClassPortrait(classId) {
   `).join('');
 
   const attentionRows = p.needsAttention.length ? p.needsAttention.map(x => {
-    const color = x.risk.level === 'high' ? 'var(--danger)' : 'var(--warning)';
     return `<tr class="risk-${x.risk.level}">
       <td><b>${esc(fullName(x.student))}</b></td>
       <td class="text-right">${x.risk.avg ? x.risk.avg.toFixed(2) : '—'}</td>
@@ -2941,7 +3046,6 @@ function openClassComparison(classId) {
 
   const diffAvg = y1 && y2 ? +(y2.avg - y1.avg).toFixed(2) : 0;
   const diffQuality = y1 && y2 ? y2.quality - y1.quality : 0;
-  const diffSuccess = y1 && y2 ? y2.success - y1.success : 0;
 
   const arrow = v => v > 0 ? '↑' : v < 0 ? '↓' : '→';
   const color = v => v > 0 ? 'var(--success)' : v < 0 ? 'var(--danger)' : 'var(--text-muted)';
@@ -3321,12 +3425,11 @@ function renderTeacherDetail(id) {
       </div>
     </div>
     <div class="stats-grid">
-      <div class="stat-card"><div class="num">${sizeMB} МБ</div><div class="lbl">Размер</div></div>
-      <div class="stat-card"><div class="num">${DB.getStudents().length}</div><div class="lbl">Учеников</div></div>
-      <div class="stat-card"><div class="num">${DB.getGrades().length}</div><div class="lbl">Оценок</div></div>
-      <div class="stat-card"><div class="num">${snapshots.length}</div><div class="lbl">Снапшотов</div></div>
+      <div class="stat-card"><div class="num">${assignments.length}</div><div class="lbl">Назначений</div></div>
+      <div class="stat-card"><div class="num">${Object.keys(perSubject).length}</div><div class="lbl">Предметов</div></div>
+      <div class="stat-card"><div class="num">${totalCnt}</div><div class="lbl">Оценок</div></div>
+      <div class="stat-card"><div class="num">${overallAvg}</div><div class="lbl">Средний балл</div></div>
     </div>
-    ${renderHealthPanel()}
     <div class="card"><h2>${icon('bar-chart', 18)} Средний балл по предметам</h2><div class="chart-box"><canvas id="teacherSubjects"></canvas></div></div>
     <div class="card"><h2>${icon('chart', 18)} Распределение оценок</h2><div class="chart-box"><canvas id="teacherDist"></canvas></div></div>
     <div class="card"><h2>${icon('grid', 18)} Назначения по предметам</h2>
@@ -3661,7 +3764,7 @@ function delUser(id) {
 }
 
 /* ============================================================
-   БЭКАП
+   ПАНЕЛЬ ЗДОРОВЬЯ (для раздела Бэкап)
    ============================================================ */
 function renderHealthPanel() {
   const h = DB.getHealth();
@@ -3708,7 +3811,7 @@ function renderHealthPanel() {
         Данные занимают ${h.fsPercent}% от лимита Firestore (${h.sizeMB} МБ из 1 МБ).
         При текущем темпе можно добавить ещё примерно <b>${h.additionalGrades.toLocaleString('ru-RU')}</b> оценок.
         <br><br>
-        <b>Рекомендация:</b> сделайте резервную копию и создайте снапшот, чтобы потом можно было откатиться.
+        <b>Рекомендация:</b> сделайте резервную копию и создайте снапшот.
       </div>
     `;
   } else {
@@ -3767,13 +3870,16 @@ function renderHealthPanel() {
       </div>
 
       <div style="margin-top:16px;padding:12px 16px;background:#f8fafc;border-radius:8px;border-left:3px solid var(--primary);font-size:13px;color:var(--text-2);line-height:1.5;">
-        <b>Что это значит:</b><br>
-        LocalStorage — быстрое хранилище в браузере, лимит 5 МБ. Firestore — облако, но один документ не больше 1 МБ.
-        Когда счётчик дойдёт до 80% — сделайте резервную копию. До 95% — обратитесь к разработчику, чтобы перейти на разбиение по нескольким документам.
+        <b>Как устроено хранение:</b><br>
+        Данные разбиты на несколько документов в облаке: meta (справочники), students (ученики), templates (шаблоны), config (настройки) и годовые документы (grades-YYYY, diagnostics-YYYY, taskResults-YYYY). Каждый год — отдельные документы, поэтому общая ёмкость измеряется десятками МБ.
       </div>
     </div>
   `;
 }
+
+/* ============================================================
+   БЭКАП
+   ============================================================ */
 function renderBackup() {
   const d = DB.load();
   const snapshots = d.snapshots || [];
@@ -3794,6 +3900,9 @@ function renderBackup() {
       <div class="stat-card"><div class="num">${DB.getGrades().length}</div><div class="lbl">Оценок</div></div>
       <div class="stat-card"><div class="num">${snapshots.length}</div><div class="lbl">Снапшотов</div></div>
     </div>
+
+    ${renderHealthPanel()}
+
     <div class="card">
       <h2>${icon('download', 18)} Действия</h2>
       <div class="btn-group">
@@ -3828,7 +3937,7 @@ function renderBackup() {
 function forceCloudSync() {
   if (typeof DB.syncFromCloud === 'function') {
     showToast('Синхронизация запущена...', 'info');
-    DB._lastCloudSync = 0; // принудительно считаем облако источником правды
+    DB._lastCloudSync = 0;
     DB.syncFromCloud();
   } else {
     showToast('Синхронизация недоступна', 'error');
@@ -5919,8 +6028,16 @@ UndoStack.load();
 render();
 
 // Облачная синхронизация при старте — один раз
-setTimeout(() => {
-  if (typeof DB !== 'undefined' && typeof DB.syncFromCloud === 'function') {
+setTimeout(async () => {
+  if (typeof DB === 'undefined') return;
+
+  // Сначала миграция со старого формата (если есть)
+  if (typeof DB.migrateCloudToSplit === 'function') {
+    await DB.migrateCloudToSplit();
+  }
+
+  // Потом синхронизация
+  if (typeof DB.syncFromCloud === 'function') {
     DB.syncFromCloud();
   }
 }, 1500);
