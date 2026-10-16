@@ -224,6 +224,17 @@ html[data-theme="dark"] .risk-low{background:rgba(72,187,120,.15);color:#68d391}
 .diag-cell-empty:hover{border-color:var(--primary)}
 html[data-theme="dark"] .diag-cell-ok{background:rgba(72,187,120,.25);color:#9ae6b4}
 html[data-theme="dark"] .diag-cell-fail{background:rgba(229,62,62,.25);color:#fc8181}
+/* ✅ НОВОЕ: бейджи срока действия МЦКО */
+.mcko-valid{background:#e6f9ee;color:#276749}
+.mcko-warning{background:#fdf3e8;color:#c05621}
+.mcko-expired{background:#fdeaea;color:#9b2c2c}
+.mcko-none{background:#eef1f4;color:#6a7f94}
+html[data-theme="dark"] .mcko-valid{background:rgba(72,187,120,.18);color:#9ae6b4}
+html[data-theme="dark"] .mcko-warning{background:rgba(237,137,54,.18);color:#fbd38d}
+html[data-theme="dark"] .mcko-expired{background:rgba(229,62,62,.18);color:#fc8181}
+html[data-theme="dark"] .mcko-none{background:rgba(160,174,192,.15);color:#a0aec0}
+.login-logo{width:110px;height:110px;object-fit:contain;margin:0 auto 8px;display:block;background:#fff;border-radius:16px;padding:10px;box-shadow:0 4px 14px rgba(0,0,0,.08)}
+.login-logo-fallback{font-size:64px;text-align:center;line-height:1}
 </style>
 </head>
 <body>
@@ -256,12 +267,86 @@ const MCKO_CLASS = {'экспертный':'badge-purple','высокий':'badg
 const ROLE_NAMES = {admin:'Администратор',teacher:'Классный руководитель',director:'Руководитель ОО'};
 const LEVEL_CLASS = {'высокий':'badge-green','повышенный':'badge-blue','базовый':'badge-orange','низкий':'badge-red','':'badge-gray'};
 
+/* ✅ НОВОЕ: срок действия МЦКО — 3 года */
+const MCKO_VALIDITY_YEARS = 3;
+const MCKO_WARN_DAYS = 90; // предупреждать за 90 дней до истечения
+
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fullName = s => `${s.lastName} ${s.firstName}${s.middleName ? ' ' + s.middleName : ''}`;
 const shortName = s => `${s.lastName} ${s.firstName[0]}.${s.middleName ? s.middleName[0] + '.' : ''}`;
 const fmtDate = d => d ? d.split('-').reverse().join('.') : '—';
 const gradeClass = v => ({'5':'grade-5','4':'grade-4','3':'grade-3','2':'grade-2'})[v] || 'grade-na';
 function todayStr(){const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;}
+
+/* ✅ НОВОЕ: расчёт срока действия МЦКО */
+function mckoExpiryInfo(teacher) {
+  // Возвращает { status, label, badgeClass, daysLeft, expiryDate, mckoDate, level }
+  // status: 'none' | 'valid' | 'warning' | 'expired'
+  if (!teacher) return { status: 'none', label: 'нет данных', badgeClass: 'mcko-none', daysLeft: null, expiryDate: null };
+  const level = teacher.mckoLevel || 'нет';
+  const mckoDate = teacher.mckoDate || '';
+  if (level === 'нет' || !mckoDate) {
+    return { status: 'none', label: 'нет МЦКО', badgeClass: 'mcko-none', daysLeft: null, expiryDate: null, mckoDate, level };
+  }
+  const parsed = new Date(mckoDate);
+  if (isNaN(parsed.getTime())) {
+    return { status: 'none', label: 'некорректная дата', badgeClass: 'mcko-none', daysLeft: null, expiryDate: null, mckoDate, level };
+  }
+  const expiry = new Date(parsed);
+  expiry.setFullYear(expiry.getFullYear() + MCKO_VALIDITY_YEARS);
+  const now = new Date();
+  const daysLeft = Math.ceil((expiry - now) / (1000 * 60 * 60 * 24));
+  const expiryStr = `${expiry.getFullYear()}-${String(expiry.getMonth()+1).padStart(2,'0')}-${String(expiry.getDate()).padStart(2,'0')}`;
+
+  if (daysLeft < 0) {
+    const daysPast = Math.abs(daysLeft);
+    return {
+      status: 'expired',
+      label: `просрочено ${daysPast} дн.`,
+      badgeClass: 'mcko-expired',
+      daysLeft,
+      expiryDate: expiryStr,
+      mckoDate, level,
+    };
+  }
+  if (daysLeft <= MCKO_WARN_DAYS) {
+    const months = Math.floor(daysLeft / 30);
+    const label = months >= 1 ? `осталось ~${months} мес.` : `осталось ${daysLeft} дн.`;
+    return {
+      status: 'warning',
+      label,
+      badgeClass: 'mcko-warning',
+      daysLeft,
+      expiryDate: expiryStr,
+      mckoDate, level,
+    };
+  }
+  const months = Math.floor(daysLeft / 30);
+  return {
+    status: 'valid',
+    label: `актуально (~${months} мес.)`,
+    badgeClass: 'mcko-valid',
+    daysLeft,
+    expiryDate: expiryStr,
+    mckoDate, level,
+  };
+}
+function mckoStatusRank(t) {
+  // Для сортировки: сначала просроченные, потом истекающие, потом актуальные, потом без МЦКО
+  const info = mckoExpiryInfo(t);
+  if (info.status === 'expired') return 0;
+  if (info.status === 'warning') return 1;
+  if (info.status === 'valid') return 2;
+  return 3;
+}
+function mckoExpiringList() {
+  // Возвращает массив учителей с истекающим или просроченным МЦКО (сортировано)
+  const list = DB.getSubjectTeachersList();
+  return list
+    .map(t => ({ teacher: t, info: mckoExpiryInfo(t) }))
+    .filter(x => x.info.status === 'warning' || x.info.status === 'expired')
+    .sort((a, b) => a.info.daysLeft - b.info.daysLeft);
+}
 
 function icon(name, size = 16, cls = '') {
   const svgs = {
@@ -297,7 +382,8 @@ function icon(name, size = 16, cls = '') {
     'info':'<circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>',
     'sparkles':'<path d="M12 3l1.5 4.5L18 9l-4.5 1.5L12 15l-1.5-4.5L6 9l4.5-1.5z"/>',
     'chevron-down':'<polyline points="6 9 12 15 18 9"/>',
-    'list':'<line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>'
+    'list':'<line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>',
+    'clock':'<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>'
   };
   const inner = svgs[name] || svgs['info'];
   return `<svg class="icon ${cls}" xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">${inner}</svg>`;
@@ -411,8 +497,6 @@ try {
     .then(() => {
       firebaseAuthReady = true;
       console.log('[Firebase] Анонимный вход выполнен');
-      // ✅ ИЗМЕНЕНИЕ: убрали дублирующий вызов миграции.
-      // Синхронизация запустится ОДИН РАЗ в самом конце файла (setTimeout 1500).
     })
     .catch(err => console.warn('[Firebase] Ошибка анонимного входа:', err));
 } catch (err) {
@@ -442,14 +526,12 @@ const DB = {
     const d = this._data;
     const now = firebase.firestore.FieldValue.serverTimestamp();
 
-    // Годы из оценок и диагностик
     const yearsSet = new Set();
     (d.grades || []).forEach(g => yearsSet.add(g.year || '2024-2025'));
     (d.diagnostics || []).forEach(x => yearsSet.add((x.date || '').slice(0, 4) || 'unknown'));
     (d.taskResults || []).forEach(r => yearsSet.add((r.date || '').slice(0, 4) || 'unknown'));
     const years = [...yearsSet].sort();
 
-    // Группировка
     const gradesByYear = {};
     const diagnosticsByYear = {};
     const taskResultsByYear = {};
@@ -467,7 +549,6 @@ const DB = {
 
     const batch = firestore.batch();
 
-    // meta
     batch.set(firestore.collection('schools').doc('meta'), {
       users: d.users || [],
       teachers: d.teachers || [],
@@ -480,46 +561,32 @@ const DB = {
       updatedAt: now,
       version: 6,
     });
-
-    // students
     batch.set(firestore.collection('schools').doc('students'), {
       students: d.students || [],
       updatedAt: now,
     });
-
-    // templates
     batch.set(firestore.collection('schools').doc('templates'), {
       templates: d.diagnosticTemplates || [],
       updatedAt: now,
     });
-
-    // ✅ ИЗМЕНЕНИЕ: config — снапшоты НЕ отправляем в облако
     batch.set(firestore.collection('schools').doc('config'), {
       autoReports: d.autoReports || {},
       dashboardWidgets: d.dashboardWidgets || [],
       plannedDiagnostics: d.plannedDiagnostics || [],
       classTransitions: d.classTransitions || [],
       gradesHistory: d.gradesHistory || [],
-      // снапшоты в облако НЕ отправляем — они только в localStorage
       updatedAt: now,
     });
 
-    // grades/diagnostics/taskResults по годам
     years.forEach(y => {
       batch.set(firestore.collection('schools').doc('grades-' + y), {
-        grades: gradesByYear[y] || [],
-        year: y,
-        updatedAt: now,
+        grades: gradesByYear[y] || [], year: y, updatedAt: now,
       });
       batch.set(firestore.collection('schools').doc('diagnostics-' + y), {
-        diagnostics: diagnosticsByYear[y] || [],
-        year: y,
-        updatedAt: now,
+        diagnostics: diagnosticsByYear[y] || [], year: y, updatedAt: now,
       });
       batch.set(firestore.collection('schools').doc('taskResults-' + y), {
-        taskResults: taskResultsByYear[y] || [],
-        year: y,
-        updatedAt: now,
+        taskResults: taskResultsByYear[y] || [], year: y, updatedAt: now,
       });
     });
 
@@ -528,7 +595,7 @@ const DB = {
     console.log('[Firebase] Сохранено в облако: meta + students + templates + config + ' + (years.length * 3) + ' годовых документов');
   },
 
-  /* ---------- ОБЛАКО: ЗАГРУЗКА (собираем из документов) ---------- */
+  /* ---------- ОБЛАКО: ЗАГРУЗКА ---------- */
   async syncFromCloud() {
     if (!firebaseReady || !firestore || !firebaseAuthReady) {
       console.log('[Firebase] syncFromCloud отложен: Firebase не готов');
@@ -536,10 +603,7 @@ const DB = {
     }
     try {
       const snapshot = await firestore.collection('schools').get({ source: 'server' });
-      if (snapshot.empty) {
-        console.log('[Firebase] В облаке нет данных — первая синхронизация');
-        return;
-      }
+      if (snapshot.empty) { console.log('[Firebase] В облаке нет данных — первая синхронизация'); return; }
 
       const result = {
         users: [], teachers: [], subjectTeachersList: [], subjectTeachers: [],
@@ -559,7 +623,6 @@ const DB = {
           const t = data.updatedAt.toMillis();
           if (t > maxCloudTime) maxCloudTime = t;
         }
-
         if (id === 'meta') {
           result.users = data.users || [];
           result.teachers = data.teachers || [];
@@ -578,12 +641,10 @@ const DB = {
           result.plannedDiagnostics = data.plannedDiagnostics || [];
           result.classTransitions = data.classTransitions || [];
           result.gradesHistory = data.gradesHistory || [];
-          // ✅ ИЗМЕНЕНИЕ: снапшоты не читаем из облака — они локальные
         }
         else if (id.startsWith('grades-')) result.grades = result.grades.concat(data.grades || []);
         else if (id.startsWith('diagnostics-')) result.diagnostics = result.diagnostics.concat(data.diagnostics || []);
         else if (id.startsWith('taskResults-')) result.taskResults = result.taskResults.concat(data.taskResults || []);
-        // 'default' (старый формат) игнорируем — его обработает миграция
       });
 
       const localTime = this._lastCloudSync || 0;
@@ -608,7 +669,6 @@ const DB = {
         }
       } else {
         console.log('[Firebase] Локальные данные новее — оставляем');
-        // ✅ ИЗМЕНЕНИЕ: обновляем метку, чтобы в виджете не висело «никогда»
         this._lastCloudSync = maxCloudTime;
       }
     } catch (err) {
@@ -616,20 +676,13 @@ const DB = {
     }
   },
 
-  /* ---------- МИГРАЦИЯ: старый 'default' → новая схема ---------- */
   async migrateCloudToSplit() {
     if (!firebaseReady || !firestore || !firebaseAuthReady) return;
     try {
       const oldDoc = await firestore.collection('schools').doc('default').get({ source: 'server' });
-      if (!oldDoc.exists) {
-        console.log('[Firebase] Миграция не нужна: старого документа default нет');
-        return;
-      }
+      if (!oldDoc.exists) { console.log('[Firebase] Миграция не нужна: старого документа default нет'); return; }
       const oldData = oldDoc.data().data;
-      if (!oldData) {
-        console.log('[Firebase] Старый документ пуст');
-        return;
-      }
+      if (!oldData) { console.log('[Firebase] Старый документ пуст'); return; }
       console.log('[Firebase] Начинаю миграцию со старого формата...');
       this._data = oldData;
       this._migrate();
@@ -642,11 +695,9 @@ const DB = {
     }
   },
 
-  /* ---------- ЗДОРОВЬЕ СИСТЕМЫ (новая схема: считаем самый большой документ) ---------- */
+  /* ---------- ЗДОРОВЬЕ СИСТЕМЫ ---------- */
   getHealth() {
     const d = this.load();
-
-    // === 1. Считаем размер БАЗЫ БЕЗ снапшотов (снапшоты — только в localStorage, в облако не идут) ===
     const cloneForCloud = { ...d };
     delete cloneForCloud.snapshots;
     const cloudJson = JSON.stringify(cloneForCloud);
@@ -654,13 +705,11 @@ const DB = {
     const cloudSizeKB = +(cloudSizeBytes / 1024).toFixed(1);
     const cloudSizeMB = +(cloudSizeBytes / 1024 / 1024).toFixed(2);
 
-    // === 2. Считаем размер ПОЛНОЙ базы (с снапшотами) — для LocalStorage ===
     const fullJson = JSON.stringify(d);
     const fullSizeBytes = new Blob([fullJson]).size;
     const fullSizeKB = +(fullSizeBytes / 1024).toFixed(1);
     const fullSizeMB = +(fullSizeBytes / 1024 / 1024).toFixed(2);
 
-    // === 3. Разбиваем данные ТОЧНО ТАК ЖЕ, как _saveToCloud, и считаем размеры документов ===
     const yearsSet = new Set();
     (d.grades || []).forEach(g => yearsSet.add(g.year || '2024-2025'));
     (d.diagnostics || []).forEach(x => yearsSet.add((x.date || '').slice(0, 4) || 'unknown'));
@@ -678,14 +727,11 @@ const DB = {
       students: new Blob([JSON.stringify({ students: d.students || [] })]).size,
       templates: new Blob([JSON.stringify({ templates: d.diagnosticTemplates || [] })]).size,
       config: new Blob([JSON.stringify({
-        autoReports: d.autoReports || {},
-        dashboardWidgets: d.dashboardWidgets || [],
-        plannedDiagnostics: d.plannedDiagnostics || [],
-        classTransitions: d.classTransitions || [],
+        autoReports: d.autoReports || {}, dashboardWidgets: d.dashboardWidgets || [],
+        plannedDiagnostics: d.plannedDiagnostics || [], classTransitions: d.classTransitions || [],
         gradesHistory: d.gradesHistory || [],
       })]).size,
     };
-
     years.forEach(y => {
       const g = (d.grades || []).filter(x => (x.year || '2024-2025') === y);
       const diag = (d.diagnostics || []).filter(x => {
@@ -701,21 +747,17 @@ const DB = {
       docSizes['taskResults-' + y] = new Blob([JSON.stringify({ taskResults: tr })]).size;
     });
 
-    // === 4. Находим самый большой документ ===
     let biggestDocName = '—';
     let biggestDocBytes = 0;
     Object.entries(docSizes).forEach(([name, size]) => {
       if (size > biggestDocBytes) { biggestDocBytes = size; biggestDocName = name; }
     });
 
-    // === 5. Проценты ===
-    const LS_LIMIT = 5 * 1024 * 1024;      // 5 МБ на localStorage
-    const FS_LIMIT = 1 * 1024 * 1024;      // 1 МБ на документ Firestore
-
+    const LS_LIMIT = 5 * 1024 * 1024;
+    const FS_LIMIT = 1 * 1024 * 1024;
     const lsPercent = Math.min(100, Math.round(fullSizeBytes / LS_LIMIT * 100));
     const fsPercent = Math.min(100, Math.round(biggestDocBytes / FS_LIMIT * 100));
 
-    // === 6. Разбивка по сущностям ===
     const breakdown = {
       students: (d.students || []).length,
       grades: (d.grades || []).length,
@@ -731,7 +773,6 @@ const DB = {
       snapshots: (d.snapshots || []).length,
     };
 
-    // === 7. Прогноз: сколько оценок ещё влезет в самый большой документ ===
     const freeBytes = Math.max(0, FS_LIMIT - biggestDocBytes);
     const biggestGradesCount = biggestDocName.startsWith('grades-')
       ? (d.grades || []).filter(x => (x.year || '2024-2025') === biggestDocName.replace('grades-', '')).length
@@ -739,20 +780,16 @@ const DB = {
     const avgGradeBytes = biggestGradesCount > 0 ? biggestDocBytes / biggestGradesCount : 100;
     const additionalGrades = Math.floor(freeBytes / Math.max(avgGradeBytes, 50));
 
-    // === 8. Общий уровень ===
     let level = 'ok';
     if (fsPercent >= 80 || lsPercent >= 80) level = 'warn';
     if (fsPercent >= 95 || lsPercent >= 95) level = 'danger';
 
     return {
-      // Размер всей базы (для общей инфы)
       cloudSizeBytes, cloudSizeKB, cloudSizeMB,
       fullSizeBytes, fullSizeKB, fullSizeMB,
-      // Самый большой документ
       biggestDocName, biggestDocBytes,
       biggestDocKB: +(biggestDocBytes / 1024).toFixed(1),
       docSizes, years,
-      // Лимиты
       lsLimit: LS_LIMIT, fsLimit: FS_LIMIT,
       lsPercent, fsPercent,
       breakdown, additionalGrades,
@@ -774,7 +811,7 @@ const DB = {
     if (!this._data.nextIds.subjectTeacherList) this._data.nextIds.subjectTeacherList = 1;
     if (!this._data.nextIds.noteId) this._data.nextIds.noteId = 1;
     if (!this._data.gradesHistory) this._data.gradesHistory = [];
-    if (!this._data.dashboardWidgets) this._data.dashboardWidgets = ['stats', 'health', 'classesTable', 'classesChart'];
+    if (!this._data.dashboardWidgets) this._data.dashboardWidgets = ['stats', 'health', 'mckoExpiring', 'classesTable', 'classesChart'];
     if (!this._data.autoReports) this._data.autoReports = { email: '', enabled: false, schedule: 'weekly', lastSent: null };
     if (!this._data.diagnosticTemplates) this._data.diagnosticTemplates = [];
     if (!this._data.taskResults) this._data.taskResults = [];
@@ -866,6 +903,9 @@ const DB = {
 
   reset() { localStorage.removeItem(this._key); this._data = null; },
 
+  /* ============================================================
+     SEED — демо-данные (у одного учителя МЦКО просрочено для теста)
+     ============================================================ */
   seed() {
     const subjects = ['Русский язык','Литература','Математика','Алгебра','Геометрия','Информатика','История','Обществознание','География','Биология','Физика','Химия','Английский язык','Физическая культура','ОБЖ','Технология'];
     const users = [
@@ -879,11 +919,25 @@ const DB = {
       { id:102, name:'Сидоров Игорь Николаевич' },
       { id:103, name:'Кузнецова Ольга Владимировна' }
     ];
+    // ✅ МЦКО: разные даты для демонстрации статусов
+    // - Смирнова: свежая дата (актуально)
+    // - Морозов: почти истекает (2.5 года назад)
+    // - Волкова: просрочено (4 года назад)
+    // - Никитин: истекает (~2.8 года назад)
+    // - Фёдорова: без МЦКО
+    const today = new Date();
+    const yearsAgo = (y, m = 0, d = 1) => {
+      const dt = new Date(today);
+      dt.setFullYear(dt.getFullYear() - y);
+      dt.setMonth(dt.getMonth() - m);
+      dt.setDate(dt.getDate() - d);
+      return `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}`;
+    };
     const subjectTeachersList = [
-      { id:1, name:'Смирнова Елена Владимировна', mckoLevel:'экспертный', mckoDate:'2024-11-15', notes:[{id:1,date:'2024-12-01',author:'Иванова М.П.',text:'Отличная подготовка к ВПР.'}] },
-      { id:2, name:'Морозов Андрей Петрович', mckoLevel:'высокий', mckoDate:'2024-10-20', notes:[] },
-      { id:3, name:'Волкова Татьяна Ивановна', mckoLevel:'базовый', mckoDate:'2023-09-15', notes:[] },
-      { id:4, name:'Никитин Дмитрий Сергеевич', mckoLevel:'высокий', mckoDate:'2025-01-12', notes:[] },
+      { id:1, name:'Смирнова Елена Владимировна', mckoLevel:'экспертный', mckoDate: yearsAgo(0, 6, 0), notes:[{id:1,date:'2024-12-01',author:'Иванова М.П.',text:'Отличная подготовка к ВПР.'}] },
+      { id:2, name:'Морозов Андрей Петрович', mckoLevel:'высокий', mckoDate: yearsAgo(2, 9, 0), notes:[] },
+      { id:3, name:'Волкова Татьяна Ивановна', mckoLevel:'базовый', mckoDate: yearsAgo(4, 2, 0), notes:[] },
+      { id:4, name:'Никитин Дмитрий Сергеевич', mckoLevel:'высокий', mckoDate: yearsAgo(2, 10, 15), notes:[] },
       { id:5, name:'Фёдорова Ольга Николаевна', mckoLevel:'нет', mckoDate:'', notes:[] }
     ];
     const buildings = [
@@ -1000,7 +1054,7 @@ const DB = {
     const plannedDiagnostics = [];
     const classTransitions = [];
     return { users, teachers, subjectTeachersList, buildings, classes, students, subjects, grades, diagnostics, subjectTeachers,
-             gradesHistory: [], dashboardWidgets: ['stats','health','classesTable','classesChart'],
+             gradesHistory: [], dashboardWidgets: ['stats','health','mckoExpiring','classesTable','classesChart'],
              autoReports: { email:'', enabled:false, schedule:'weekly', lastSent:null },
              diagnosticTemplates, taskResults,
              plannedDiagnostics, classTransitions,
@@ -1142,7 +1196,7 @@ const DB = {
   },
   getAutoReports() { return this.load().autoReports || {}; },
   setAutoReports(patch) { const d = this.load(); d.autoReports = { ...(d.autoReports || {}), ...patch }; this.save(); },
-  getDashboardWidgets() { return this.load().dashboardWidgets || ['stats','health','classesTable','classesChart']; },
+  getDashboardWidgets() { return this.load().dashboardWidgets || ['stats','health','mckoExpiring','classesTable','classesChart']; },
   setDashboardWidgets(list) { const d = this.load(); d.dashboardWidgets = list; this.save(); },
   getTemplates() { return this.load().diagnosticTemplates || []; },
   addTemplate(t) { const d=this.load(); t.id=d.nextIds.templateId++; d.diagnosticTemplates.push(t); this.save(); return t; },
@@ -1687,6 +1741,7 @@ const NAV_GROUPS = [
     { key:'analytics/heatmap', icon:'grid', label:'Тепловая карта' },
     { key:'analytics/risks', icon:'alert', label:'Риски' },
     { key:'analytics/teachers', icon:'user', label:'Учителя' },
+    { key:'analytics/mcko', icon:'clock', label:'МЦКО — срок действия' },
     { key:'diagnostics/templates', icon:'check', label:'Диагностики' },
     { key:'diagnostics/calendar', icon:'list', label:'Календарь диагностик' },
     { key:'reports/quality', icon:'award', label:'Отчёты школы' }
@@ -1703,6 +1758,7 @@ const NAV_GROUPS = [
 ];
 
 function isAdminSession() { return SESSION && SESSION.role === 'admin'; }
+function isAdminOrDirector() { return SESSION && (SESSION.role === 'admin' || SESSION.role === 'director'); }
 function activeRouteObj() {
   const h = location.hash.replace('#', '') || 'dashboard';
   const [r, s] = h.split('/');
@@ -1726,6 +1782,8 @@ function renderNav(active) {
   if (!SESSION) return '';
   const act = activeRouteObj();
   const admin = isAdminSession();
+  const mckoExpiring = mckoExpiringList();
+  const mckoCount = mckoExpiring.length;
   let html = '<nav class="tabs" id="sa-grouped-nav">';
   NAV_GROUPS.forEach(g => {
     if (g.adminOnly && !admin) return;
@@ -1780,8 +1838,13 @@ function renderNav(active) {
       const isActive = s
         ? act.route === r && (act.sub === s || (!act.sub && s === 'main'))
         : act.route === r;
+      let badge = '';
+      if (it.key === 'analytics/mcko' && isAdminOrDirector()) {
+        const count = mckoExpiringList().length;
+        if (count > 0) badge = ` <span class="badge badge-red" style="font-size:10px;padding:1px 6px;margin-left:auto;">${count}</span>`;
+      }
       return `<button type="button" data-sa-hash="${it.key}" class="${isActive ? 'active' : ''}">
-        ${icon(it.icon, 14)} <span>${it.label}</span>
+        ${icon(it.icon, 14)} <span>${it.label}</span>${badge}
       </button>`;
     }).join('');
   }
@@ -1882,14 +1945,16 @@ function go(tab) { location.hash = tab; }
 window.addEventListener('hashchange', render);
 
 /* ============================================================
-   ЛОГИН
+   ЛОГИН — ✅ ИЗМЕНЕНО: логотип школы вместо смайлика
    ============================================================ */
 function renderLogin() {
   document.getElementById('app').innerHTML = `
   <div style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,var(--primary-dark),var(--primary));padding:20px;">
     <div style="background:var(--bg-card);border-radius:16px;padding:40px;width:100%;max-width:400px;box-shadow:var(--shadow-lg);animation:fadeInUp .4s ease;">
       <div style="text-align:center;margin-bottom:28px;">
-        <div style="font-size:48px;">📊</div>
+        <img class="login-logo" src="https://sch1512.mskobr.ru/attach_files/logo/logo1512_1.png"
+             alt="Школа"
+             onerror="this.outerHTML='&lt;div class=\\'login-logo-fallback\\'&gt;📊&lt;/div&gt;'">
         <h1 style="color:var(--primary);margin-top:8px;">Школьная аналитика</h1>
         <p class="muted" style="margin-top:6px;">Вход в систему</p>
       </div>
@@ -2141,6 +2206,7 @@ function renderDashboard() {
   const widgetMeta = {
     stats: { title: 'Статистика', icon: 'chart', render: () => renderWidgetStats(students, classes, subjects, diags) },
     health: { title: 'Здоровье системы', icon: 'database', render: () => renderWidgetHealth() },
+    mckoExpiring: { title: 'МЦКО — срок действия', icon: 'clock', render: () => renderWidgetMckoExpiring(), adminOnly: true },
     classesTable: { title: 'Классы (таблица)', icon: 'grid', render: () => renderWidgetClassesTable(students, classes, subjects) },
     classesChart: { title: 'Средний балл по классам', icon: 'bar-chart', render: () => renderWidgetClassesChart(classes, students, subjects) },
     risksChart: { title: 'Прогноз риска', icon: 'alert', render: () => renderWidgetRisks(students) },
@@ -2150,6 +2216,7 @@ function renderDashboard() {
   const widgetsHtml = widgets.map((k, i) => {
     const meta = widgetMeta[k];
     if (!meta) return '';
+    if (meta.adminOnly && !isAdminOrDirector()) return '';
     return `<div class="widget" draggable="true" data-widget="${k}" data-index="${i}">
       <div class="widget-header">
         <div class="widget-title">${icon(meta.icon, 16)} ${meta.title}</div>
@@ -2159,7 +2226,11 @@ function renderDashboard() {
     </div>`;
   }).join('');
 
-  const hidden = Object.keys(widgetMeta).filter(k => !widgets.includes(k));
+  const hidden = Object.keys(widgetMeta).filter(k => {
+    if (widgets.includes(k)) return false;
+    if (widgetMeta[k].adminOnly && !isAdminOrDirector()) return false;
+    return true;
+  });
 
   page(`
     <div class="row-flex" style="justify-content:space-between;margin-bottom:16px;">
@@ -2180,6 +2251,7 @@ function renderWidgetStats(students, classes, subjects, diags) {
   const teachersList = DB.getSubjectTeachersList().filter(t =>
     DB.getSubjectTeachers().some(st => st.teacherId === t.id && classes.some(c => c.id === st.classId)));
   const highRisk = students.map(s => studentRisk(s.id)).filter(r => r.level === 'high').length;
+  const mckoAlerts = isAdminOrDirector() ? mckoExpiringList().length : 0;
   return `<div class="stats-grid" style="margin-bottom:0;">
     <div class="stat-card"><div class="num">${students.length}</div><div class="lbl">Обучающихся</div></div>
     <div class="stat-card"><div class="num">${classes.length}</div><div class="lbl">Классов</div></div>
@@ -2188,7 +2260,49 @@ function renderWidgetStats(students, classes, subjects, diags) {
     <div class="stat-card"><div class="num">${diags.length}</div><div class="lbl">Диагностик</div></div>
     ${highRisk > 0 ? `<div class="stat-card" style="border-left-color:var(--danger);">
       <div class="num" style="color:var(--danger);">${highRisk}</div><div class="lbl">В группе риска</div></div>` : ''}
+    ${mckoAlerts > 0 ? `<div class="stat-card" style="border-left-color:var(--warning);">
+      <div class="num" style="color:var(--warning);">${mckoAlerts}</div><div class="lbl">МЦКО просрочен/истекает</div></div>` : ''}
   </div>`;
+}
+
+/* ✅ НОВЫЙ ВИДЖЕТ: МЦКО — срок действия */
+function renderWidgetMckoExpiring() {
+  if (!isAdminOrDirector()) return `<div class="empty">Нет доступа</div>`;
+  const list = mckoExpiringList();
+  if (!list.length) {
+    return `<div class="empty"><div class="empty-icon">✓</div>
+      <div>Все учителя с актуальным МЦКО</div>
+      <div class="muted" style="font-size:11px;">Ближайшее истечение — более ${MCKO_WARN_DAYS} дней</div>
+    </div>`;
+  }
+  const expired = list.filter(x => x.info.status === 'expired');
+  const warning = list.filter(x => x.info.status === 'warning');
+  const rows = list.slice(0, 6).map(({ teacher, info }) => `
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border);gap:8px;">
+      <div style="flex:1;min-width:0;">
+        <div style="font-weight:600;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(teacher.name)}</div>
+        <div class="muted" style="font-size:11px;">
+          МЦКО: ${esc(info.level)} · ${esc(fmtDate(info.mckoDate))} → до ${esc(fmtDate(info.expiryDate))}
+        </div>
+      </div>
+      <span class="badge ${info.badgeClass}" style="font-size:11px;white-space:nowrap;">${esc(info.label)}</span>
+    </div>`).join('');
+  return `
+    <div style="display:flex;flex-direction:column;gap:10px;">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        ${expired.length ? `<span class="badge badge-red">🔴 просрочено: ${expired.length}</span>` : ''}
+        ${warning.length ? `<span class="badge badge-orange">🟡 истекает: ${warning.length}</span>` : ''}
+      </div>
+      <div style="font-size:12px;color:var(--text-muted);">
+        Срок действия МЦКО — ${MCKO_VALIDITY_YEARS} года. Предупреждаем за ${MCKO_WARN_DAYS} дней.
+      </div>
+      ${rows}
+      ${list.length > 6 ? `<div class="muted" style="text-align:center;font-size:11px;">…и ещё ${list.length - 6}</div>` : ''}
+      <button class="btn btn-outline btn-sm" onclick="go('analytics/mcko')" style="justify-content:center;">
+        ${icon('list', 12)} Все учителя (${list.length})
+      </button>
+    </div>
+  `;
 }
 
 /* ✅ ИЗМЕНЕНИЕ: виджет здоровья — показывает размер самого большого документа */
@@ -2314,18 +2428,20 @@ function renderWidgetTopStudents(students, subjects) {
 }
 function removeWidget(key) { DB.setDashboardWidgets(DB.getDashboardWidgets().filter(k => k !== key)); renderDashboard(); }
 function addWidget(key) { const w = DB.getDashboardWidgets(); if (!w.includes(key)) w.push(key); DB.setDashboardWidgets(w); renderDashboard(); }
-function resetWidgets() { DB.setDashboardWidgets(['stats','health','classesTable','classesChart']); renderDashboard(); }
+function resetWidgets() { DB.setDashboardWidgets(['stats','health','mckoExpiring','classesTable','classesChart']); renderDashboard(); }
 function openWidgetsModal() {
   const all = {
     stats: { title: 'Статистика', icon: 'chart' },
     health: { title: 'Здоровье системы', icon: 'database' },
+    mckoExpiring: { title: 'МЦКО — срок действия', icon: 'clock', adminOnly: true },
     classesTable: { title: 'Классы (таблица)', icon: 'grid' },
     classesChart: { title: 'Средний балл по классам', icon: 'bar-chart' },
     risksChart: { title: 'Прогноз риска', icon: 'alert' },
     topStudents: { title: 'Топ-5 учеников', icon: 'award' },
   };
   const current = DB.getDashboardWidgets();
-  const hidden = Object.keys(all).filter(k => !current.includes(k));
+  const availableAll = Object.keys(all).filter(k => !all[k].adminOnly || isAdminOrDirector());
+  const hidden = availableAll.filter(k => !current.includes(k));
   showModal(`
     <h2>${icon('grid', 20)} Настройка виджетов</h2>
     ${current.length ? `<h3>Активные</h3><div>${current.map(k => `
@@ -2527,11 +2643,9 @@ function applyImportStudents() {
   const text = document.getElementById('imp_text').value;
   const list = parseStudentsText(text);
   if (!list.length) { showToast('Нет данных', 'error'); return; }
-
   UndoStack.push(`Импорт учеников (${list.length})`);
   let createdClasses = 0;
   let addedStudents = 0;
-
   list.forEach(s => {
     let cid = null;
     if (s.className) {
@@ -2543,7 +2657,6 @@ function applyImportStudents() {
     DB.addStudent({ lastName: s.lastName, firstName: s.firstName, middleName: s.middleName, birthDate: s.birthDate, classId: cid });
     addedStudents++;
   });
-
   closeModal();
   let msg = `Добавлено учеников: ${addedStudents}`;
   if (createdClasses > 0) msg += ` · создано классов: ${createdClasses}`;
@@ -3373,16 +3486,23 @@ function onTeacherAssignChange(classId, subject, teacherId) {
 }
 function openSubjectTeacherListModal() {
   const list = DB.getSubjectTeachersList();
-  const rows = list.map(t => `
+  // ✅ ИЗМЕНЕНИЕ: сортировка по сроку МЦКО + бейдж статуса
+  const sorted = [...list].sort((a, b) => mckoStatusRank(a) - mckoStatusRank(b));
+  const rows = sorted.map(t => {
+    const info = mckoExpiryInfo(t);
+    return `
     <tr><td><b>${esc(t.name)}</b><br>
       <span class="badge ${MCKO_CLASS[t.mckoLevel || 'нет']}" style="font-size:11px;">МЦКО: ${esc(t.mckoLevel || 'нет')}</span>
-      ${t.mckoDate ? `<span class="muted" style="font-size:12px;"> · ${esc(fmtDate(t.mckoDate))}</span>` : ''}</td>
+      <span class="badge ${info.badgeClass}" style="font-size:11px;margin-left:4px;">${icon('clock', 10)} ${esc(info.label)}</span>
+      ${t.mckoDate ? `<span class="muted" style="font-size:12px;"> · от ${esc(fmtDate(t.mckoDate))}${info.expiryDate ? ` до ${esc(fmtDate(info.expiryDate))}` : ''}</span>` : ''}</td>
       <td class="text-right nowrap">
         <button class="btn btn-outline btn-sm" onclick="openTeacherCard(${t.id})">${icon('user', 12)} Карточка</button>
         <button class="btn btn-danger btn-sm btn-icon" onclick="delSubjectTeacher(${t.id})" title="Удалить">${icon('trash', 12)}</button>
-      </td></tr>`).join('');
+      </td></tr>`;
+  }).join('');
   showModal(`
     <h2>${icon('user', 20)} Справочник учителей</h2>
+    <div class="alert alert-info" style="font-size:13px;">${icon('info', 14)} Срок действия МЦКО — ${MCKO_VALIDITY_YEARS} года. Учителя с истекающим/просроченным МЦКО выделены и находятся вверху списка.</div>
     <div class="row-flex mb-16" style="gap:10px;">
       <input id="newTeacherName" placeholder="ФИО нового учителя" style="flex:1;padding:10px;border:1px solid var(--border-strong);border-radius:8px;font-family:inherit;background:var(--bg-input);color:var(--text);">
       <button class="btn btn-primary" onclick="addSubjectTeacherFromModal()">${icon('plus', 14)} Добавить</button>
@@ -3436,7 +3556,7 @@ function applyBulkAssign() {
 }
 
 /* ============================================================
-   КАРТОЧКА УЧИТЕЛЯ
+   КАРТОЧКА УЧИТЕЛЯ — ✅ ИЗМЕНЕНО: с блоком срока МЦКО
    ============================================================ */
 function openTeacherCard(id) { closeModal(); location.hash = 'teacher/' + id; }
 
@@ -3481,6 +3601,21 @@ function renderTeacherDetail(id) {
         <button class="btn btn-danger btn-sm btn-icon" onclick="delTeacherNote(${id},${n.id})" title="Удалить">${icon('trash', 12)}</button>
       </td></tr>`).join('');
   const canEdit = SESSION.role === 'admin';
+
+  // ✅ Блок МЦКО
+  const mcko = mckoExpiryInfo(teacher);
+  const mckoColor = mcko.status === 'expired' ? 'var(--danger)' :
+                    mcko.status === 'warning' ? 'var(--warning)' :
+                    mcko.status === 'valid' ? 'var(--success)' : 'var(--text-muted)';
+  const mckoIcon = mcko.status === 'expired' ? '🔴' :
+                   mcko.status === 'warning' ? '🟡' :
+                   mcko.status === 'valid' ? '🟢' : '⚪';
+  const mckoAlert = mcko.status === 'expired'
+    ? `<div class="alert alert-error" style="margin-top:14px;">${icon('alert', 14)} <b>МЦКО просрочено!</b> Необходимо направить учителя на повторное прохождение диагностики. Срок действия истёк ${esc(fmtDate(mcko.expiryDate))}.</div>`
+    : mcko.status === 'warning'
+    ? `<div class="alert alert-warn" style="margin-top:14px;">${icon('clock', 14)} <b>Срок МЦКО истекает.</b> Направьте учителя на повторное прохождение до ${esc(fmtDate(mcko.expiryDate))} (осталось ${mcko.daysLeft} дн.).</div>`
+    : '';
+
   page(`
     <div class="card">
       <div class="row-flex" style="justify-content:space-between;align-items:flex-start;gap:12px;">
@@ -3488,7 +3623,7 @@ function renderTeacherDetail(id) {
           <h2 style="margin-bottom:8px;">${icon('user', 22)} ${esc(teacher.name)}</h2>
           <div class="row-flex" style="gap:8px;">
             <span class="badge ${MCKO_CLASS[teacher.mckoLevel || 'нет']}" style="font-size:14px;">МЦКО: ${esc(teacher.mckoLevel || 'нет')}</span>
-            ${teacher.mckoDate ? `<span class="muted">от ${esc(fmtDate(teacher.mckoDate))}</span>` : ''}
+            <span class="badge ${mcko.badgeClass}" style="font-size:13px;">${icon('clock', 12)} ${esc(mcko.label)}</span>
           </div>
         </div>
         <div class="btn-group">
@@ -3499,6 +3634,31 @@ function renderTeacherDetail(id) {
         </div>
       </div>
     </div>
+
+    <div class="card">
+      <h2>${icon('clock', 18)} МЦКО — срок действия</h2>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;">
+        <div class="stat-card" style="border-left-color:${mckoColor};">
+          <div class="num" style="color:${mckoColor};font-size:22px;">${mckoIcon}</div>
+          <div class="lbl" style="font-size:13px;font-weight:600;color:var(--text-2);margin-top:6px;">${esc(mcko.status === 'expired' ? 'Просрочено' : mcko.status === 'warning' ? 'Истекает' : mcko.status === 'valid' ? 'Актуально' : 'Нет МЦКО')}</div>
+        </div>
+        <div class="stat-card" style="border-left-color:var(--primary);">
+          <div class="num" style="font-size:20px;">${teacher.mckoDate ? esc(fmtDate(teacher.mckoDate)) : '—'}</div>
+          <div class="lbl">Дата прохождения</div>
+        </div>
+        <div class="stat-card" style="border-left-color:${mckoColor};">
+          <div class="num" style="font-size:20px;color:${mckoColor};">${mcko.expiryDate ? esc(fmtDate(mcko.expiryDate)) : '—'}</div>
+          <div class="lbl">Действительно до</div>
+        </div>
+        <div class="stat-card" style="border-left-color:${mckoColor};">
+          <div class="num" style="font-size:20px;color:${mckoColor};">${mcko.daysLeft !== null ? (mcko.daysLeft >= 0 ? mcko.daysLeft + ' дн.' : Math.abs(mcko.daysLeft) + ' дн. назад') : '—'}</div>
+          <div class="lbl">${mcko.daysLeft !== null && mcko.daysLeft >= 0 ? 'Осталось' : (mcko.daysLeft !== null ? 'Просрочено на' : 'Срок')}</div>
+        </div>
+      </div>
+      <div class="muted" style="margin-top:10px;font-size:12px;">${icon('info', 12)} Срок действия МЦКО — <b>${MCKO_VALIDITY_YEARS} года</b>. Предупреждение — за <b>${MCKO_WARN_DAYS} дней</b>.</div>
+      ${mckoAlert}
+    </div>
+
     <div class="stats-grid">
       <div class="stat-card"><div class="num">${assignments.length}</div><div class="lbl">Назначений</div></div>
       <div class="stat-card"><div class="num">${Object.keys(perSubject).length}</div><div class="lbl">Предметов</div></div>
@@ -3532,6 +3692,7 @@ function renderTeacherDetail(id) {
 function openEditTeacherModal(id) {
   const t = DB.getSubjectTeachersList().find(x => x.id === id);
   if (!t) return;
+  const info = mckoExpiryInfo(t);
   showModal(`
     <h2>${icon('edit', 20)} Редактирование учителя</h2>
     <div class="form-grid">
@@ -3539,6 +3700,9 @@ function openEditTeacherModal(id) {
       <div class="form-group"><label>Уровень МЦКО</label>
         <select id="et_mcko">${MCKO_LEVELS.map(l => `<option value="${l}" ${t.mckoLevel===l?'selected':''}>${esc(l)}</option>`).join('')}</select></div>
       <div class="form-group"><label>Дата МЦКО</label><input id="et_mcko_date" type="date" value="${esc(t.mckoDate || '')}"></div>
+    </div>
+    <div class="alert alert-info" style="margin-top:14px;font-size:13px;">
+      ${icon('info', 14)} Срок действия — <b>${MCKO_VALIDITY_YEARS} года</b> с даты прохождения.${t.mckoDate ? ` Текущий срок: до <b>${esc(fmtDate(info.expiryDate))}</b>.` : ''}
     </div>
     <div class="form-actions">
       <button class="btn btn-primary" onclick="saveTeacherEdit(${id})">${icon('save', 14)} Сохранить</button>
@@ -3840,7 +4004,7 @@ function delUser(id) {
 }
 
 /* ============================================================
-   ПАНЕЛЬ ЗДОРОВЬЯ — ✅ ИЗМЕНЕНО (считает размер самого большого документа)
+   ПАНЕЛЬ ЗДОРОВЬЯ
    ============================================================ */
 function renderHealthPanel() {
   const h = DB.getHealth();
@@ -3865,7 +4029,6 @@ function renderHealthPanel() {
     <td class="text-right"><b>${h.breakdown[r.key]}</b></td>
   </tr>`).join('');
 
-  // ✅ Разбивка по документам Firestore
   const docRows = Object.entries(h.docSizes)
     .sort((a, b) => b[1] - a[1])
     .map(([name, bytes]) => {
@@ -3887,12 +4050,6 @@ function renderHealthPanel() {
         <b>⚠️ Критическая ситуация</b><br>
         Самый большой документ <b>${esc(h.biggestDocName)}</b> занимает ${h.fsPercent}% от лимита Firestore (1 МБ).
         Скоро новые записи в этот документ перестанут сохраняться.
-        <br><br>
-        <b>Что делать:</b>
-        <ul style="margin-left:20px;margin-top:8px;">
-          <li>Скачайте резервную копию JSON</li>
-          <li>Обратитесь к разработчику для разбиения документа на части по параллелям или четвертям</li>
-        </ul>
       </div>
     `;
   } else if (h.level === 'warn') {
@@ -3901,8 +4058,6 @@ function renderHealthPanel() {
         <b>🟡 Внимание</b><br>
         Самый большой документ <b>${esc(h.biggestDocName)}</b> занимает ${h.fsPercent}% от лимита Firestore (${h.biggestDocKB} КБ из 1024 КБ).
         При текущем темпе можно добавить ещё примерно <b>${h.additionalGrades.toLocaleString('ru-RU')}</b> оценок в этот документ.
-        <br><br>
-        <b>Рекомендация:</b> сделайте резервную копию и следите за ростом.
       </div>
     `;
   } else {
@@ -3973,8 +4128,8 @@ function renderHealthPanel() {
 
       <div style="margin-top:16px;padding:12px 16px;background:#f8fafc;border-radius:8px;border-left:3px solid var(--primary);font-size:13px;color:var(--text-2);line-height:1.5;">
         <b>Как устроено хранение:</b><br>
-        Данные разбиты на несколько документов в облаке: <b>meta</b> (справочники), <b>students</b> (ученики), <b>templates</b> (шаблоны), <b>config</b> (настройки) и годовые документы (<b>grades-YYYY</b>, <b>diagnostics-YYYY</b>, <b>taskResults-YYYY</b>). Каждый год — отдельные документы, поэтому общая ёмкость измеряется десятками МБ.<br><br>
-        <b>Снапшоты</b> хранятся только в браузере (localStorage) и в облако не отправляются — они нужны только для локального восстановления.
+        Данные разбиты на несколько документов в облаке: <b>meta</b>, <b>students</b>, <b>templates</b>, <b>config</b> и годовые документы (<b>grades-YYYY</b>, <b>diagnostics-YYYY</b>, <b>taskResults-YYYY</b>). Каждый год — отдельные документы.<br><br>
+        <b>Снапшоты</b> хранятся только в браузере (localStorage).
       </div>
     </div>
   `;
@@ -4294,6 +4449,7 @@ function exportClass(classId) {
 function exportTeacherCard(id) {
   const t = DB.getSubjectTeachersList().find(x => x.id === id);
   if (!t) return;
+  const mcko = mckoExpiryInfo(t);
   const classes = allowedClasses();
   const students = allowedStudents();
   const assignments = DB.getSubjectTeachers().filter(st => st.teacherId === id && classes.some(c => c.id === st.classId));
@@ -4317,6 +4473,8 @@ function exportTeacherCard(id) {
     <table class="info-table">
       <tr><td>МЦКО:</td><td>${esc(t.mckoLevel || 'нет')}</td></tr>
       <tr><td>Дата МЦКО:</td><td>${esc(t.mckoDate ? fmtDate(t.mckoDate) : '—')}</td></tr>
+      <tr><td>Действительно до:</td><td>${esc(mcko.expiryDate ? fmtDate(mcko.expiryDate) : '—')}</td></tr>
+      <tr><td>Статус МЦКО:</td><td><b>${esc(mcko.label)}</b></td></tr>
       <tr><td>Всего оценок:</td><td>${totalCnt}</td></tr>
       <tr><td>Средний балл:</td><td><b>${overallAvg}</b></td></tr>
     </table>
@@ -4343,6 +4501,7 @@ function exportTeacherCard(id) {
 function printTeacherCharacteristic(id) {
   const t = DB.getSubjectTeachersList().find(x => x.id === id);
   if (!t) return;
+  const mcko = mckoExpiryInfo(t);
   const classes = allowedClasses();
   const students = allowedStudents();
   const assignments = DB.getSubjectTeachers().filter(st => st.teacherId === id && classes.some(c => c.id === st.classId));
@@ -4367,7 +4526,7 @@ function printTeacherCharacteristic(id) {
       <tr><td>Предметы:</td><td>${esc([...subjectsSet].join(', ') || '—')}</td></tr>
       <tr><td>Классы:</td><td>${esc([...classesSet].map(cid => DB.getClasses().find(c => c.id === cid)?.name || '').filter(Boolean).join(', ') || '—')}</td></tr>
       <tr><td>Обучающихся:</td><td>${studentSet.size}</td></tr>
-      <tr><td>МЦКО:</td><td><b>${esc(t.mckoLevel || 'нет')}</b></td></tr>
+      <tr><td>МЦКО:</td><td><b>${esc(t.mckoLevel || 'нет')}</b> ${t.mckoDate ? `(от ${esc(fmtDate(t.mckoDate))}, до ${esc(fmtDate(mcko.expiryDate))})` : ''}</td></tr>
     </table>
     <h3>Показатели</h3>
     <table><tbody>
@@ -4461,11 +4620,18 @@ function exportTeachersXLSX() {
   const classes = allowedClasses();
   const students = allowedStudents();
   const teachersList = DB.getSubjectTeachersList();
-  const rows = [['Учитель', 'МЦКО', 'Предметов', 'Классов', 'Учеников', 'Средний балл', 'Оценок', 'Замечаний']];
+  // ✅ ИЗМЕНЕНИЕ: добавлены колонки МЦКО
+  const rows = [['Учитель', 'МЦКО', 'Дата МЦКО', 'Действительно до', 'Статус МЦКО', 'Предметов', 'Классов', 'Учеников', 'Средний балл', 'Оценок', 'Замечаний']];
   const colored = [];
   teachersList.forEach((t, i) => {
+    const mcko = mckoExpiryInfo(t);
     const assignments = DB.getSubjectTeachers().filter(st => st.teacherId === t.id && classes.some(c => c.id === st.classId));
-    if (!assignments.length) { rows.push([t.name, t.mckoLevel || 'нет', 0, 0, 0, '', 0, (t.notes||[]).length]); return; }
+    const mckoRowBg = mcko.status === 'expired' ? 'FED7D7' : mcko.status === 'warning' ? 'FEFCBF' : mcko.status === 'valid' ? 'C6F6D5' : 'FFFFFF';
+    if (!assignments.length) {
+      rows.push([t.name, t.mckoLevel || 'нет', t.mckoDate || '', mcko.expiryDate || '', mcko.label, 0, 0, 0, '', 0, (t.notes||[]).length]);
+      colored.push({ r: i+1, c: 4, bg: mckoRowBg, bold: true });
+      return;
+    }
     const subjectsSet = new Set(), classesSet = new Set(), studentSet = new Set();
     let sum = 0, cnt = 0;
     assignments.forEach(a => {
@@ -4477,14 +4643,15 @@ function exportTeachersXLSX() {
       });
     });
     const avg = cnt ? (sum/cnt).toFixed(2) : '';
-    rows.push([t.name, t.mckoLevel || 'нет', subjectsSet.size, classesSet.size, studentSet.size, avg, cnt, (t.notes||[]).length]);
+    rows.push([t.name, t.mckoLevel || 'нет', t.mckoDate || '', mcko.expiryDate || '', mcko.label, subjectsSet.size, classesSet.size, studentSet.size, avg, cnt, (t.notes||[]).length]);
+    colored.push({ r: i+1, c: 4, bg: mckoRowBg, bold: true });
     if (avg) {
       const v = +avg;
       const bg = v >= 4.5 ? 'C6F6D5' : v >= 3.5 ? 'BEE3F8' : v >= 2.5 ? 'FEFCBF' : 'FED7D7';
-      colored.push({ r: i + 1, c: 5, bg, bold: true });
+      colored.push({ r: i + 1, c: 8, bg, bold: true });
     }
   });
-  downloadXLSX('Аналитика_учителя.xlsx', [{ name:'Учителя', rows, colWidths:[30,12,12,12,12,14,12,12], coloredCells: colored }]);
+  downloadXLSX('Аналитика_учителя.xlsx', [{ name:'Учителя', rows, colWidths:[30,12,12,14,20,12,12,12,14,12,12], coloredCells: colored }]);
 }
 function openExportArchiveModal() {
   showModal(`
@@ -4523,7 +4690,7 @@ function doExportArchive() {
 /* ============================================================
    АНАЛИТИКА — общий роутер
    ============================================================ */
-let analyticsFilter = { classId:'', subject:'', period:'', tab: 'main', ratingMcko: '', parallel: '' };
+let analyticsFilter = { classId:'', subject:'', period:'', tab: 'main', ratingMcko: '', parallel: '', mckoStatus: '' };
 function renderAnalytics() {
   const tabs = `
     <div class="subtabs">
@@ -4532,12 +4699,150 @@ function renderAnalytics() {
       <button class="${analyticsFilter.tab==='heatmap'?'active':''}" onclick="analyticsFilter.tab='heatmap';renderAnalytics();">${icon('grid', 14)} Тепловая карта</button>
       <button class="${analyticsFilter.tab==='risks'?'active':''}" onclick="analyticsFilter.tab='risks';renderAnalytics();">${icon('alert', 14)} Риски</button>
       <button class="${analyticsFilter.tab==='teachers'?'active':''}" onclick="analyticsFilter.tab='teachers';renderAnalytics();">${icon('user', 14)} Учителя</button>
+      <button class="${analyticsFilter.tab==='mcko'?'active':''}" onclick="analyticsFilter.tab='mcko';renderAnalytics();">${icon('clock', 14)} МЦКО</button>
     </div>`;
   if (analyticsFilter.tab === 'heatmap') return renderAnalyticsHeatmap(tabs);
   if (analyticsFilter.tab === 'risks') return renderAnalyticsRisks(tabs);
   if (analyticsFilter.tab === 'teachers') return renderAnalyticsTeachers(tabs);
   if (analyticsFilter.tab === 'parallels') return renderAnalyticsParallels(tabs);
+  if (analyticsFilter.tab === 'mcko') return renderAnalyticsMcko(tabs);
   return renderAnalyticsMain(tabs);
+}
+
+/* ============================================================
+   ✅ НОВЫЙ РАЗДЕЛ АНАЛИТИКИ: МЦКО — срок действия
+   ============================================================ */
+function renderAnalyticsMcko(tabs) {
+  if (!isAdminOrDirector()) {
+    page(`
+      <h1 style="margin-bottom:16px;color:var(--primary);">Аналитика</h1>
+      ${tabs}
+      <div class="card"><div class="empty">Нет доступа</div></div>
+    `, 'analytics');
+    return;
+  }
+  const list = DB.getSubjectTeachersList();
+  const items = list.map(t => ({ teacher: t, info: mckoExpiryInfo(t) }));
+  const filtered = analyticsFilter.mckoStatus
+    ? items.filter(x => x.info.status === analyticsFilter.mckoStatus)
+    : items;
+  const sorted = [...filtered].sort((a, b) => {
+    const ra = mckoStatusRank(a.teacher);
+    const rb = mckoStatusRank(b.teacher);
+    if (ra !== rb) return ra - rb;
+    return (a.info.daysLeft ?? 99999) - (b.info.daysLeft ?? 99999);
+  });
+
+  const counts = {
+    expired: items.filter(x => x.info.status === 'expired').length,
+    warning: items.filter(x => x.info.status === 'warning').length,
+    valid: items.filter(x => x.info.status === 'valid').length,
+    none: items.filter(x => x.info.status === 'none').length,
+  };
+
+  const rows = sorted.map(({ teacher, info }) => {
+    const colorIcon = info.status === 'expired' ? '🔴' :
+                      info.status === 'warning' ? '🟡' :
+                      info.status === 'valid' ? '🟢' : '⚪';
+    const daysText = info.daysLeft === null ? '—' :
+                     info.daysLeft >= 0 ? `${info.daysLeft} дн.` :
+                     `${Math.abs(info.daysLeft)} дн. назад`;
+    return `<tr>
+      <td>${colorIcon}</td>
+      <td><b>${esc(teacher.name)}</b></td>
+      <td><span class="badge ${MCKO_CLASS[teacher.mckoLevel || 'нет']}">${esc(teacher.mckoLevel || 'нет')}</span></td>
+      <td class="nowrap">${teacher.mckoDate ? esc(fmtDate(teacher.mckoDate)) : '—'}</td>
+      <td class="nowrap">${info.expiryDate ? esc(fmtDate(info.expiryDate)) : '—'}</td>
+      <td class="text-right"><span class="badge ${info.badgeClass}">${esc(info.label)}</span></td>
+      <td class="text-right nowrap">${daysText}</td>
+      <td class="text-right nowrap">
+        <button class="btn btn-outline btn-sm btn-icon" onclick="openTeacherCard(${teacher.id})" title="Карточка">${icon('user', 12)}</button>
+        ${SESSION.role === 'admin' ? `<button class="btn btn-primary btn-sm btn-icon" onclick="openEditTeacherModal(${teacher.id})" title="Обновить МЦКО">${icon('edit', 12)}</button>` : ''}
+      </td>
+    </tr>`;
+  }).join('');
+
+  const statusFilterButtons = `
+    <div class="btn-group">
+      <button class="btn ${!analyticsFilter.mckoStatus?'btn-primary':'btn-outline'} btn-sm" onclick="analyticsFilter.mckoStatus='';renderAnalytics();">
+        Все <span class="muted" style="color:${!analyticsFilter.mckoStatus?'#fff':'inherit'};">(${items.length})</span>
+      </button>
+      <button class="btn ${analyticsFilter.mckoStatus==='expired'?'btn-primary':'btn-outline'} btn-sm" onclick="analyticsFilter.mckoStatus='expired';renderAnalytics();">
+        🔴 Просрочено (${counts.expired})
+      </button>
+      <button class="btn ${analyticsFilter.mckoStatus==='warning'?'btn-primary':'btn-outline'} btn-sm" onclick="analyticsFilter.mckoStatus='warning';renderAnalytics();">
+        🟡 Истекает (${counts.warning})
+      </button>
+      <button class="btn ${analyticsFilter.mckoStatus==='valid'?'btn-primary':'btn-outline'} btn-sm" onclick="analyticsFilter.mckoStatus='valid';renderAnalytics();">
+        🟢 Актуально (${counts.valid})
+      </button>
+      <button class="btn ${analyticsFilter.mckoStatus==='none'?'btn-primary':'btn-outline'} btn-sm" onclick="analyticsFilter.mckoStatus='none';renderAnalytics();">
+        ⚪ Нет МЦКО (${counts.none})
+      </button>
+    </div>
+  `;
+
+  page(`
+    <h1 style="margin-bottom:16px;color:var(--primary);">Аналитика · МЦКО</h1>
+    ${tabs}
+
+    <div class="alert alert-info">
+      ${icon('info', 14)} <b>Срок действия МЦКО — ${MCKO_VALIDITY_YEARS} года.</b> Система предупреждает за ${MCKO_WARN_DAYS} дней.
+      Учителей с просроченным МЦКО необходимо направить на повторное прохождение диагностики.
+    </div>
+
+    <div class="stats-grid">
+      <div class="stat-card" style="border-left-color:var(--danger);">
+        <div class="num" style="color:var(--danger);">${counts.expired}</div>
+        <div class="lbl">🔴 Просрочено</div>
+      </div>
+      <div class="stat-card" style="border-left-color:var(--warning);">
+        <div class="num" style="color:var(--warning);">${counts.warning}</div>
+        <div class="lbl">🟡 Истекает (&lt; ${MCKO_WARN_DAYS} дн.)</div>
+      </div>
+      <div class="stat-card" style="border-left-color:var(--success);">
+        <div class="num" style="color:var(--success);">${counts.valid}</div>
+        <div class="lbl">🟢 Актуально</div>
+      </div>
+      <div class="stat-card" style="border-left-color:var(--text-muted);">
+        <div class="num" style="color:var(--text-muted);">${counts.none}</div>
+        <div class="lbl">⚪ Нет МЦКО</div>
+      </div>
+    </div>
+
+    ${counts.expired + counts.warning > 0 ? `
+      <div class="card">
+        <h2>${icon('alert', 18)} Требуют внимания</h2>
+        <div class="alert alert-warn" style="margin-bottom:0;">
+          ${icon('alert', 14)} <b>${counts.expired + counts.warning} учител${counts.expired + counts.warning === 1 ? 'ь' : 'ей'}</b>
+          с просроченным или истекающим МЦКО. Направьте на повторное прохождение.
+        </div>
+      </div>
+    ` : ''}
+
+    <div class="card">
+      <div class="row-flex" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:16px;">
+        <h2 style="margin:0;">${icon('clock', 18)} Список учителей (${sorted.length})</h2>
+        <div class="btn-group">
+          ${statusFilterButtons}
+          <button class="btn btn-success btn-sm" onclick="exportTeachersXLSX()">${icon('file-excel', 14)} Excel</button>
+        </div>
+      </div>
+      ${sorted.length ? `<div class="table-wrap"><table>
+        <thead><tr>
+          <th></th>
+          <th>Учитель</th>
+          <th>Уровень МЦКО</th>
+          <th>Дата прохождения</th>
+          <th>Действительно до</th>
+          <th class="text-right">Статус</th>
+          <th class="text-right">Осталось</th>
+          <th></th>
+        </tr></thead>
+        <tbody>${rows}</tbody></table></div>`
+      : `<div class="empty"><div class="empty-icon">✓</div><div>Нет учителей с этим статусом</div></div>`}
+    </div>
+  `, 'analytics');
 }
 
 /* ============================================================
@@ -4838,8 +5143,12 @@ function renderAnalyticsTeachers(tabs) {
   const rows = filtered.map((x, i) => {
     const medal = i < 3 ? ['🥇','🥈','🥉'][i] : (i+1);
     const cls = x.avg >= 4.5 ? 'badge-green' : x.avg >= 3.5 ? 'badge-blue' : x.avg >= 2.5 ? 'badge-orange' : 'badge-red';
+    const info = mckoExpiryInfo(x.t);
     return `<tr><td><b>${medal}</b></td>
-      <td>${esc(x.t.name)}<br><span class="badge ${MCKO_CLASS[x.t.mckoLevel || 'нет']}" style="font-size:11px;">МЦКО: ${esc(x.t.mckoLevel || 'нет')}</span></td>
+      <td>${esc(x.t.name)}<br>
+        <span class="badge ${MCKO_CLASS[x.t.mckoLevel || 'нет']}" style="font-size:11px;">МЦКО: ${esc(x.t.mckoLevel || 'нет')}</span>
+        <span class="badge ${info.badgeClass}" style="font-size:11px;margin-left:4px;">${icon('clock', 10)} ${esc(info.label)}</span>
+      </td>
       <td class="text-right">${x.assignments}</td>
       <td class="text-right">${x.cnt}</td>
       <td class="text-right"><span class="badge ${cls}">${x.avg.toFixed(2)}</span></td>
@@ -6132,16 +6441,11 @@ initMobileMode();
 UndoStack.load();
 render();
 
-// Облачная синхронизация при старте — ОДИН РАЗ (после анонимного входа Firebase)
 setTimeout(async () => {
   if (typeof DB === 'undefined') return;
-
-  // Сначала миграция со старого формата (если есть)
   if (typeof DB.migrateCloudToSplit === 'function') {
     await DB.migrateCloudToSplit();
   }
-
-  // Потом синхронизация
   if (typeof DB.syncFromCloud === 'function') {
     DB.syncFromCloud();
   }
