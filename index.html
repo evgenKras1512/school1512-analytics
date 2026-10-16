@@ -1899,9 +1899,6 @@ function renderLogin() {
       <div class="form-group" style="margin-bottom:20px;"><label>Пароль</label>
         <input id="passInput" type="password" autocomplete="current-password" placeholder="Введите пароль"></div>
       <button class="btn btn-primary" style="width:100%;justify-content:center;padding:12px;font-size:15px;" onclick="doLogin()">${icon('check', 16)} Войти</button>
-      <div style="margin-top:24px;padding-top:18px;border-top:1px solid var(--border);font-size:12px;color:var(--text-muted);">
-        <b>Демо:</b> admin/admin123 · director/director123 · teacher1/teacher123
-      </div>
     </div>
   </div>`;
   document.getElementById('loginInput').addEventListener('keydown', e => { if (e.key==='Enter') doLogin(); });
