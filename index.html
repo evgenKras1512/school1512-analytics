@@ -2528,8 +2528,9 @@ function renderStudents() {
         <h2 style="margin:0;">${icon('users', 20)} Обучающиеся</h2>
         <div class="btn-group">
           ${SESSION.role === 'admin' ? `
-            <button class="btn btn-outline btn-sm" onclick="openStudentsPasteModal()" title="Excel">${icon('upload', 14)} Excel</button>
-            <button class="btn btn-outline btn-sm" onclick="openStudentsCsvModal()" title="CSV">${icon('download', 14)} CSV</button>
+            <button class="btn btn-success btn-sm" onclick="openImportPackModal()" title="Импорт всего пакета">${icon('upload', 14)} Импорт всего (.xlsx)</button>
+            <button class="btn btn-outline btn-sm" onclick="openStudentsPasteModal()" title="Импорт только учеников">${icon('upload', 14)} Ученики</button>
+            <button class="btn btn-outline btn-sm" onclick="openStudentsCsvModal()" title="CSV учеников">${icon('download', 14)} CSV</button>
             <button class="btn btn-primary btn-sm" onclick="studentForm()" title="Добавить">${icon('plus', 14)} Добавить</button>` : ''}
         </div>
       </div>
@@ -4168,6 +4169,9 @@ function renderBackup() {
         <button class="btn btn-outline" onclick="openImportBackupModal()" title="Загрузить">${icon('upload', 14)} Восстановить</button>
         <button class="btn btn-outline" onclick="createSnapshotManual()" title="Снапшот">${icon('save', 14)} Создать снапшот</button>
         <button class="btn btn-outline" onclick="forceCloudSync()" title="Синхронизация с облаком">${icon('refresh', 14)} Синхронизировать с облаком</button>
+        <button class="btn btn-outline" onclick="downloadImportTemplateXLSX()" title="Скачать шаблон XLSX">${icon('download', 14)} Шаблон .xlsx</button>
+        <button class="btn btn-success" onclick="exportFullPackXLSX()" title="Выгрузить всё в XLSX">${icon('file-excel', 14)} Выгрузить пакет .xlsx</button>
+        <button class="btn btn-primary" onclick="openImportPackModal()" title="Импорт из XLSX">${icon('upload', 14)} Импорт пакета</button>
       </div>
     </div>
     <div class="card">
@@ -4662,6 +4666,7 @@ function openExportArchiveModal() {
         <label><input type="checkbox" id="exp_classes" checked> Классы (XLSX)</label>
         <label><input type="checkbox" id="exp_teachers" checked> Учителя (XLSX)</label>
         <label><input type="checkbox" id="exp_backup" checked> Полная резервная копия (JSON)</label>
+        <label><input type="checkbox" id="exp_pack"> Полный XLSX-пакет (5 листов)</label>
       </div>
     </div>
     <div class="form-actions">
@@ -4676,6 +4681,7 @@ function doExportArchive() {
     classes: document.getElementById('exp_classes')?.checked,
     teachers: document.getElementById('exp_teachers')?.checked,
     backup: document.getElementById('exp_backup')?.checked,
+    pack: document.getElementById('exp_pack')?.checked,
   };
   let i = 0;
   const delay = (fn) => setTimeout(fn, (i++) * 700);
@@ -4683,6 +4689,7 @@ function doExportArchive() {
   if (checks.classes) delay(() => exportAnalyticsXLSX());
   if (checks.teachers) delay(() => exportTeachersXLSX());
   if (checks.backup) delay(() => downloadBackupJSON());
+  if (checks.pack) delay(() => exportFullPackXLSX());
   closeModal();
   showToast('Экспорт запущен', 'success');
 }
@@ -6432,7 +6439,669 @@ window.reportsExportStrugglingXlsx = function() {
   });
   downloadXLSX(`Неуспевающие_${todayStr()}.xlsx`, [{ name:'Неуспевающие', rows, colWidths:[30,10,14,10,40], coloredCells: colored }]);
 };
+/* ============================================================
+   ЕДИНЫЙ XLSX-ПАКЕТ: ЭКСПОРТ ШАБЛОНА + ИМПОРТ 5 ЛИСТОВ
+   ============================================================
+   Листы:
+     1. "Учителя"        — ФИО | УровеньМЦКО | ДатаМЦКО | Замечания
+     2. "Классы"         — Класс | Здание | КлассныйРуководитель
+     3. "Ученики"        — Фамилия | Имя | Отчество | ДатаРождения | Класс
+     4. "Назначения"     — Класс | Предмет | Учитель
+     5. "Оценки"         — Ученик | Класс | Предмет | Период | Тип | Оценка | Год
+   ============================================================ */
 
+const XLSX_PACK_SHEETS = {
+  teachers: {
+    name: 'Учителя',
+    headers: ['ФИО', 'УровеньМЦКО', 'ДатаМЦКО', 'Замечания'],
+    example: [
+      ['Смирнова Елена Владимировна', 'экспертный', '15.06.2024', ''],
+      ['Морозов Андрей Петрович',     'высокий',    '10.01.2023', ''],
+      ['Фёдорова Ольга Николаевна',   'нет',        '',           'МЦКО не проходила'],
+    ],
+    widths: [32, 18, 14, 40],
+  },
+  classes: {
+    name: 'Классы',
+    headers: ['Класс', 'Здание', 'КлассныйРуководитель'],
+    example: [
+      ['5А', 'Здание №1 (начальная школа)', 'Петрова Анна Сергеевна'],
+      ['5Б', 'Здание №1 (начальная школа)', 'Сидоров Игорь Николаевич'],
+    ],
+    widths: [10, 32, 32],
+  },
+  students: {
+    name: 'Ученики',
+    headers: ['Фамилия', 'Имя', 'Отчество', 'ДатаРождения', 'Класс'],
+    example: [
+      ['Алексеев', 'Дмитрий', 'Андреевич', '15.03.2012', '5А'],
+      ['Борисова', 'Екатерина', 'Игоревна', '22.07.2012', '5А'],
+    ],
+    widths: [18, 14, 18, 14, 10],
+  },
+  assignments: {
+    name: 'Назначения',
+    headers: ['Класс', 'Предмет', 'Учитель'],
+    example: [
+      ['5А', 'Математика', 'Смирнова Елена Владимировна'],
+      ['5А', 'Русский язык', 'Морозов Андрей Петрович'],
+    ],
+    widths: [10, 20, 32],
+  },
+  grades: {
+    name: 'Оценки',
+    headers: ['Ученик', 'Класс', 'Предмет', 'Период', 'Тип', 'Оценка', 'Год'],
+    example: [
+      ['Алексеев Дмитрий Андреевич', '5А', 'Математика', 'I четверть', 'текущая', '5', '2024-2025'],
+      ['Алексеев Дмитрий Андреевич', '5А', 'Математика', 'Год',        'итоговая', '5', '2024-2025'],
+    ],
+    widths: [32, 10, 20, 14, 14, 8, 12],
+  },
+};
+
+/* -------- Экспорт пустого шаблона для заполнения -------- */
+function downloadImportTemplateXLSX() {
+  if (typeof XLSX === 'undefined') { showToast('XLSX-библиотека не загружена', 'error'); return; }
+  try {
+    const wb = XLSX.utils.book_new();
+
+    // Лист-инструкция
+    const infoRows = [
+      ['ШКОЛЬНАЯ АНАЛИТИКА — ШАБЛОН ДЛЯ ИМПОРТА'],
+      [''],
+      ['Порядок заполнения листов (слева-направо):'],
+      ['  1. Учителя     — справочник учителей-предметников с МЦКО'],
+      ['  2. Классы      — список классов с зданием и классным руководителем'],
+      ['  3. Ученики     — состав классов'],
+      ['  4. Назначения  — какой учитель ведёт какой предмет в каком классе'],
+      ['  5. Оценки      — собственно оценки (можно оставить пустым)'],
+      [''],
+      ['ПРАВИЛА:'],
+      ['  • Листы можно удалить, если нечего импортировать (но не все сразу)'],
+      ['  • Пустые строки и строки с # игнорируются'],
+      ['  • Даты в формате ДД.ММ.ГГГГ'],
+      ['  • Уровень МЦКО: экспертный | высокий | базовый | нет'],
+      ['  • Период: I четверть | II четверть | III четверть | IV четверть | Год'],
+      ['  • Тип оценки: текущая | промежуточная | итоговая'],
+      ['  • Оценка: 2 | 3 | 4 | 5'],
+      [''],
+      ['Импорт выполняется по кнопке «📤 Импорт всего (.xlsx)»'],
+      ['Перед применением будет показан предпросмотр.'],
+    ];
+    const wsInfo = XLSX.utils.aoa_to_sheet(infoRows);
+    wsInfo['!cols'] = [{ wch: 80 }];
+    XLSX.utils.book_append_sheet(wb, wsInfo, 'Инструкция');
+
+    // 5 листов
+    Object.values(XLSX_PACK_SHEETS).forEach(sheet => {
+      const aoa = [sheet.headers, ...sheet.example];
+      const ws = XLSX.utils.aoa_to_sheet(aoa);
+      ws['!cols'] = sheet.widths.map(w => ({ wch: w }));
+      XLSX.utils.book_append_sheet(wb, ws, sheet.name);
+    });
+
+    const filename = `Шаблон_импорта_${todayStr()}.xlsx`;
+    XLSX.writeFile(wb, filename);
+    showToast('Шаблон скачан: ' + filename, 'success', 4000);
+  } catch (err) {
+    console.error(err);
+    showToast('Ошибка шаблона: ' + err.message, 'error', 5000);
+  }
+}
+
+/* -------- Экспорт текущих данных в тот же формат -------- */
+function exportFullPackXLSX() {
+  if (typeof XLSX === 'undefined') { showToast('XLSX-библиотека не загружена', 'error'); return; }
+  try {
+    const d = DB.load();
+    const wb = XLSX.utils.book_new();
+
+    // Учителя
+    const teachersRows = [XLSX_PACK_SHEETS.teachers.headers];
+    (d.subjectTeachersList || []).forEach(t => {
+      teachersRows.push([
+        t.name || '',
+        t.mckoLevel || 'нет',
+        t.mckoDate ? fmtDate(t.mckoDate) : '',
+        (t.notes || []).map(n => `${fmtDate(n.date)} ${n.author ? '('+n.author+') ' : ''}${n.text}`).join(' | '),
+      ]);
+    });
+    const wsT = XLSX.utils.aoa_to_sheet(teachersRows);
+    wsT['!cols'] = XLSX_PACK_SHEETS.teachers.widths.map(w => ({ wch: w }));
+    XLSX.utils.book_append_sheet(wb, wsT, XLSX_PACK_SHEETS.teachers.name);
+
+    // Классы
+    const classesRows = [XLSX_PACK_SHEETS.classes.headers];
+    (d.classes || []).forEach(c => {
+      const b = (d.buildings || []).find(x => x.id === c.buildingId);
+      const t = (d.teachers || []).find(x => x.id === c.teacherId);
+      classesRows.push([c.name || '', b ? b.name : '', t ? t.name : '']);
+    });
+    const wsC = XLSX.utils.aoa_to_sheet(classesRows);
+    wsC['!cols'] = XLSX_PACK_SHEETS.classes.widths.map(w => ({ wch: w }));
+    XLSX.utils.book_append_sheet(wb, wsC, XLSX_PACK_SHEETS.classes.name);
+
+    // Ученики
+    const studentsRows = [XLSX_PACK_SHEETS.students.headers];
+    (d.students || []).slice().sort((a,b) => a.lastName.localeCompare(b.lastName, 'ru')).forEach(s => {
+      const c = (d.classes || []).find(x => x.id === s.classId);
+      studentsRows.push([s.lastName || '', s.firstName || '', s.middleName || '', s.birthDate ? fmtDate(s.birthDate) : '', c ? c.name : '']);
+    });
+    const wsS = XLSX.utils.aoa_to_sheet(studentsRows);
+    wsS['!cols'] = XLSX_PACK_SHEETS.students.widths.map(w => ({ wch: w }));
+    XLSX.utils.book_append_sheet(wb, wsS, XLSX_PACK_SHEETS.students.name);
+
+    // Назначения
+    const assignRows = [XLSX_PACK_SHEETS.assignments.headers];
+    (d.subjectTeachers || []).forEach(st => {
+      const c = (d.classes || []).find(x => x.id === st.classId);
+      const t = (d.subjectTeachersList || []).find(x => x.id === st.teacherId);
+      if (!c || !t) return;
+      assignRows.push([c.name, st.subject, t.name]);
+    });
+    const wsA = XLSX.utils.aoa_to_sheet(assignRows);
+    wsA['!cols'] = XLSX_PACK_SHEETS.assignments.widths.map(w => ({ wch: w }));
+    XLSX.utils.book_append_sheet(wb, wsA, XLSX_PACK_SHEETS.assignments.name);
+
+    // Оценки
+    const gradesRows = [XLSX_PACK_SHEETS.grades.headers];
+    (d.grades || []).forEach(g => {
+      const s = (d.students || []).find(x => x.id === g.studentId);
+      if (!s) return;
+      const c = (d.classes || []).find(x => x.id === s.classId);
+      gradesRows.push([
+        fullName(s), c ? c.name : '', g.subject || '', g.period || '', g.type || '', g.value || '', g.year || '',
+      ]);
+    });
+    const wsG = XLSX.utils.aoa_to_sheet(gradesRows);
+    wsG['!cols'] = XLSX_PACK_SHEETS.grades.widths.map(w => ({ wch: w }));
+    XLSX.utils.book_append_sheet(wb, wsG, XLSX_PACK_SHEETS.grades.name);
+
+    const filename = `Полный_пакет_${todayStr()}.xlsx`;
+    XLSX.writeFile(wb, filename);
+    showToast('Экспортировано: ' + filename, 'success', 4000);
+  } catch (err) {
+    console.error(err);
+    showToast('Ошибка экспорта: ' + err.message, 'error', 5000);
+  }
+}
+
+/* -------- Разбор файла и предпросмотр -------- */
+let _packPreview = null;  // { teachers, classes, students, assignments, grades, warnings }
+
+function openImportPackModal() {
+  const existing = document.getElementById('modalOverlay');
+  if (existing) existing.remove();
+
+  showModal(`
+    <h2>📥 Импорт единого пакета (.xlsx)</h2>
+    <div class="alert alert-info">
+      ${icon('info', 14)} Загрузите файл с листами <b>Учителя</b>, <b>Классы</b>, <b>Ученики</b>, <b>Назначения</b>, <b>Оценки</b>.<br>
+      Не хватает листа — не страшно, импортируются только те, что есть. Порядок обработки: Учителя → Классы → Ученики → Назначения → Оценки.
+    </div>
+    <div class="row-flex" style="gap:10px;margin-bottom:16px;">
+      <button class="btn btn-outline btn-sm" onclick="downloadImportTemplateXLSX()">${icon('download', 14)} Скачать шаблон</button>
+      <button class="btn btn-outline btn-sm" onclick="exportFullPackXLSX()">${icon('file-excel', 14)} Выгрузить текущие данные</button>
+    </div>
+    <div class="form-group mb-16"><label>Файл .xlsx</label>
+      <input type="file" id="packFile" accept=".xlsx,.xls,.csv" onchange="previewImportPack(event)"></div>
+    <div id="packPreview"></div>
+  `);
+}
+
+function _readSheetSafe(wb, name) {
+  const sheet = wb.Sheets[name];
+  if (!sheet) return null;
+  const arr = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', raw: false });
+  return arr.filter((row, i) => {
+    // первая строка — заголовок, оставляем; пустые и # — убираем
+    if (i === 0) return true;
+    return row.some(cell => String(cell).trim() !== '' && !String(cell).trim().startsWith('#'));
+  });
+}
+
+function _sheetToObjects(rows) {
+  // rows[0] — заголовки. Остальное — объекты по заголовкам.
+  if (!rows || !rows.length) return [];
+  const headers = rows[0].map(h => String(h || '').trim());
+  return rows.slice(1).map(row => {
+    const obj = {};
+    headers.forEach((h, i) => { obj[h] = row[i] !== undefined ? String(row[i]).trim() : ''; });
+    return obj;
+  }).filter(o => Object.values(o).some(v => v !== ''));
+}
+
+function _normalizeDateOrEmpty(s) {
+  if (!s) return '';
+  const d = normalizeDate(s);
+  return d || '';
+}
+
+function previewImportPack(event) {
+  const file = event.target.files && event.target.files[0];
+  const box = document.getElementById('packPreview');
+  if (!file) { if (box) box.innerHTML = ''; _packPreview = null; return; }
+  if (typeof XLSX === 'undefined') { showToast('XLSX не загружен', 'error'); return; }
+
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try {
+      const wb = XLSX.read(e.target.result, { type: 'array', cellDates: false });
+      const result = _buildImportPlan(wb);
+      _packPreview = result;
+      renderImportPreview(result);
+    } catch (err) {
+      console.error(err);
+      if (box) box.innerHTML = `<div class="alert alert-error">Ошибка чтения файла: ${esc(err.message)}</div>`;
+      _packPreview = null;
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+function _buildImportPlan(wb) {
+  const d = DB.load();
+  const warnings = [];
+
+  // Существующие индексы (для поиска совпадений)
+  const existingTeachersByName = new Map();
+  (d.subjectTeachersList || []).forEach(t => existingTeachersByName.set(t.name.trim().toLowerCase(), t));
+  const existingBuildingsByName = new Map();
+  (d.buildings || []).forEach(b => existingBuildingsByName.set(b.name.trim().toLowerCase(), b));
+  const existingTeachersRukByName = new Map();
+  (d.teachers || []).forEach(t => existingTeachersRukByName.set(t.name.trim().toLowerCase(), t));
+  const existingClassesByName = new Map();
+  (d.classes || []).forEach(c => existingClassesByName.set(c.name.trim().toLowerCase(), c));
+  const existingStudentsByKey = new Map(); // "last|first|middle|class" -> student
+  (d.students || []).forEach(s => {
+    const c = (d.classes || []).find(x => x.id === s.classId);
+    const cn = c ? c.name.trim().toLowerCase() : '';
+    existingStudentsByKey.set(
+      `${s.lastName.trim().toLowerCase()}|${s.firstName.trim().toLowerCase()}|${(s.middleName||'').trim().toLowerCase()}|${cn}`,
+      s
+    );
+  });
+
+  // -------- Учителя --------
+  const teachersSheet = _readSheetSafe(wb, XLSX_PACK_SHEETS.teachers.name);
+  const teachersPlan = [];
+  if (teachersSheet) {
+    _sheetToObjects(teachersSheet).forEach(row => {
+      const name = (row['ФИО'] || '').trim();
+      if (!name) return;
+      const mckoRaw = (row['УровеньМЦКО'] || '').trim().toLowerCase();
+      const mckoLevel = MCKO_LEVELS.includes(mckoRaw) ? mckoRaw : (mckoRaw ? 'нет' : 'нет');
+      if (mckoRaw && !MCKO_LEVELS.includes(mckoRaw)) {
+        warnings.push(`Учитель "${name}": неверный уровень МЦКО "${row['УровеньМЦКО']}", поставлено «нет»`);
+      }
+      const mckoDate = _normalizeDateOrEmpty(row['ДатаМЦКО'] || '');
+      if ((row['ДатаМЦКО'] || '').trim() && !mckoDate) {
+        warnings.push(`Учитель "${name}": неверная дата МЦКО "${row['ДатаМЦКО']}"`);
+      }
+      const notesRaw = (row['Замечания'] || '').trim();
+      const existing = existingTeachersByName.get(name.toLowerCase());
+      teachersPlan.push({
+        _existing: !!existing,
+        _existingId: existing ? existing.id : null,
+        name,
+        mckoLevel,
+        mckoDate,
+        notesRaw,
+      });
+    });
+  }
+
+  // -------- Классы --------
+  const classesSheet = _readSheetSafe(wb, XLSX_PACK_SHEETS.classes.name);
+  const classesPlan = [];
+  if (classesSheet) {
+    _sheetToObjects(classesSheet).forEach(row => {
+      const className = (row['Класс'] || '').trim();
+      if (!className) return;
+      const buildingName = (row['Здание'] || '').trim();
+      const teacherName = (row['КлассныйРуководитель'] || '').trim();
+      const existing = existingClassesByName.get(className.toLowerCase());
+      classesPlan.push({
+        _existing: !!existing,
+        _existingId: existing ? existing.id : null,
+        name: className,
+        buildingName,
+        teacherName,
+      });
+    });
+  }
+
+  // -------- Ученики --------
+  const studentsSheet = _readSheetSafe(wb, XLSX_PACK_SHEETS.students.name);
+  const studentsPlan = [];
+  if (studentsSheet) {
+    _sheetToObjects(studentsSheet).forEach((row, idx) => {
+      const lastName = (row['Фамилия'] || '').trim();
+      const firstName = (row['Имя'] || '').trim();
+      const middleName = (row['Отчество'] || '').trim();
+      const className = (row['Класс'] || '').trim();
+      if (!lastName || !firstName) {
+        warnings.push(`Ученик #${idx + 2}: не хватает фамилии/имени — пропущен`);
+        return;
+      }
+      const birthRaw = (row['ДатаРождения'] || '').trim();
+      const birthDate = _normalizeDateOrEmpty(birthRaw);
+      if (birthRaw && !birthDate) {
+        warnings.push(`Ученик "${lastName} ${firstName}": неверная дата рождения "${birthRaw}"`);
+      }
+      const key = `${lastName.toLowerCase()}|${firstName.toLowerCase()}|${middleName.toLowerCase()}|${className.toLowerCase()}`;
+      const existing = existingStudentsByKey.get(key);
+      studentsPlan.push({
+        _existing: !!existing,
+        _existingId: existing ? existing.id : null,
+        lastName, firstName, middleName, birthDate, className,
+      });
+    });
+  }
+
+  // -------- Назначения --------
+  const assignSheet = _readSheetSafe(wb, XLSX_PACK_SHEETS.assignments.name);
+  const assignmentsPlan = [];
+  if (assignSheet) {
+    _sheetToObjects(assignSheet).forEach(row => {
+      const className = (row['Класс'] || '').trim();
+      const subject = (row['Предмет'] || '').trim();
+      const teacherName = (row['Учитель'] || '').trim();
+      if (!className || !subject || !teacherName) return;
+      assignmentsPlan.push({ className, subject, teacherName });
+    });
+  }
+
+  // -------- Оценки --------
+  const gradesSheet = _readSheetSafe(wb, XLSX_PACK_SHEETS.grades.name);
+  const gradesPlan = [];
+  if (gradesSheet) {
+    _sheetToObjects(gradesSheet).forEach((row, idx) => {
+      const studentFio = (row['Ученик'] || '').trim();
+      const className = (row['Класс'] || '').trim();
+      const subject = (row['Предмет'] || '').trim();
+      const period = (row['Период'] || '').trim();
+      const type = (row['Тип'] || '').trim();
+      const value = (row['Оценка'] || '').trim();
+      const year = (row['Год'] || '').trim() || '2024-2025';
+
+      if (!studentFio || !subject || !value) {
+        warnings.push(`Оценка #${idx + 2}: не хватает обязательных полей — пропущена`);
+        return;
+      }
+      if (!PERIODS.includes(period)) {
+        warnings.push(`Оценка #${idx + 2}: неверный период "${period}" — пропущена`);
+        return;
+      }
+      if (!GRADE_TYPES.includes(type)) {
+        warnings.push(`Оценка #${idx + 2}: неверный тип "${type}" — пропущена`);
+        return;
+      }
+      if (!/^[2-5]$/.test(value)) {
+        warnings.push(`Оценка #${idx + 2}: неверная оценка "${value}" — пропущена`);
+        return;
+      }
+      gradesPlan.push({ studentFio, className, subject, period, type, value, year });
+    });
+  }
+
+  return {
+    teachers: teachersPlan,
+    classes: classesPlan,
+    students: studentsPlan,
+    assignments: assignmentsPlan,
+    grades: gradesPlan,
+    warnings,
+  };
+}
+
+function renderImportPreview(plan) {
+  const box = document.getElementById('packPreview');
+  if (!box) return;
+
+  const countNew = arr => arr.filter(x => !x._existing).length;
+  const countUpd = arr => arr.filter(x => x._existing).length;
+
+  const statRow = (label, arr, updatable) => {
+    if (!arr.length) return '';
+    const n = countNew(arr);
+    const u = updatable ? countUpd(arr) : 0;
+    return `<tr>
+      <td><b>${esc(label)}</b></td>
+      <td class="text-right">${arr.length}</td>
+      <td class="text-right" style="color:var(--success);">${n}</td>
+      <td class="text-right" style="color:var(--warning);">${updatable ? u : '—'}</td>
+    </tr>`;
+  };
+
+  const totalNew = countNew(plan.teachers) + countNew(plan.classes) + countNew(plan.students);
+  const totalGrades = plan.grades.length;
+
+  box.innerHTML = `
+    <div class="alert ${plan.warnings.length ? 'alert-warn' : 'alert-success'}">
+      ${icon(plan.warnings.length ? 'alert' : 'check', 14)}
+      ${plan.warnings.length
+        ? `<b>Найдено предупреждений: ${plan.warnings.length}.</b> Строки с ошибками будут пропущены, остальное импортируется.`
+        : `<b>Файл прочитан успешно.</b> Проблем не обнаружено.`}
+    </div>
+
+    <h3>Сводка</h3>
+    <div class="table-wrap" style="max-height:220px;overflow:auto;margin-bottom:14px;">
+      <table>
+        <thead><tr><th>Сущность</th><th class="text-right">Всего</th><th class="text-right">Создать</th><th class="text-right">Обновить</th></tr></thead>
+        <tbody>
+          ${statRow('Учителя', plan.teachers, true)}
+          ${statRow('Классы', plan.classes, false)}
+          ${statRow('Ученики', plan.students, false)}
+          ${statRow('Назначения', plan.assignments, false)}
+          ${statRow('Оценки', plan.grades, false)}
+        </tbody>
+      </table>
+    </div>
+
+    ${plan.warnings.length ? `
+      <details style="margin-bottom:14px;">
+        <summary style="cursor:pointer;font-weight:600;color:var(--warning);">⚠️ Показать предупреждения (${plan.warnings.length})</summary>
+        <div style="max-height:180px;overflow:auto;padding:10px;background:var(--bg-input);border-radius:8px;margin-top:8px;font-size:12px;line-height:1.6;">
+          ${plan.warnings.slice(0, 100).map(w => `<div>• ${esc(w)}</div>`).join('')}
+          ${plan.warnings.length > 100 ? `<div class="muted">…и ещё ${plan.warnings.length - 100}</div>` : ''}
+        </div>
+      </details>
+    ` : ''}
+
+    <div class="form-actions">
+      <button class="btn btn-primary" onclick="applyImportPack()">${icon('check', 14)} Импортировать (${totalNew} новых, ${totalGrades} оценок)</button>
+      <button class="btn btn-outline" onclick="closeModal()">Отмена</button>
+    </div>
+  `;
+}
+
+async function applyImportPack() {
+  if (!_packPreview) { showToast('Сначала выберите файл', 'error'); return; }
+  const plan = _packPreview;
+  if (!plan.teachers.length && !plan.classes.length && !plan.students.length && !plan.assignments.length && !plan.grades.length) {
+    showToast('Нечего импортировать', 'error'); return;
+  }
+
+  UndoStack.push('Импорт XLSX-пакета');
+  const d = DB.load();
+  const log = { teachersNew: 0, teachersUpd: 0, classesNew: 0, buildingsNew: 0, rukNew: 0,
+                studentsNew: 0, assignmentsNew: 0, gradesNew: 0, gradesSkipped: 0 };
+
+  // 1. Учителя (справочник subjectTeachersList)
+  for (const t of plan.teachers) {
+    if (t._existing) {
+      const ex = d.subjectTeachersList.find(x => x.id === t._existingId);
+      if (ex) {
+        ex.name = t.name;
+        ex.mckoLevel = t.mckoLevel;
+        ex.mckoDate = t.mckoDate;
+        if (t.notesRaw) {
+          if (!ex.notes) ex.notes = [];
+          // Добавляем заметку, если такой текст ещё нет
+          const has = ex.notes.some(n => (n.text || '').trim() === t.notesRaw.trim());
+          if (!has) {
+            ex.notes.unshift({
+              id: d.nextIds.noteId++,
+              date: todayStr(),
+              author: SESSION ? SESSION.name : 'Импорт',
+              text: t.notesRaw,
+            });
+          }
+        }
+        log.teachersUpd++;
+      }
+    } else {
+      d.subjectTeachersList.push({
+        id: d.nextIds.subjectTeacherList++,
+        name: t.name,
+        mckoLevel: t.mckoLevel,
+        mckoDate: t.mckoDate,
+        notes: t.notesRaw ? [{
+          id: d.nextIds.noteId++,
+          date: todayStr(),
+          author: SESSION ? SESSION.name : 'Импорт',
+          text: t.notesRaw,
+        }] : [],
+      });
+      log.teachersNew++;
+    }
+  }
+
+  // 2. Классы (с автосозданием зданий и классных руководителей)
+  const findOrCreateBuilding = (name) => {
+    if (!name) {
+      if (d.buildings.length) return d.buildings[0].id;
+      const b = { id: d.nextIds.building++, name: 'Здание по умолчанию' };
+      d.buildings.push(b);
+      log.buildingsNew++;
+      return b.id;
+    }
+    const ex = d.buildings.find(b => b.name.trim().toLowerCase() === name.trim().toLowerCase());
+    if (ex) return ex.id;
+    const nb = { id: d.nextIds.building++, name };
+    d.buildings.push(nb);
+    log.buildingsNew++;
+    return nb.id;
+  };
+  const findOrCreateRuk = (name) => {
+    if (!name) return null;
+    const ex = d.teachers.find(t => t.name.trim().toLowerCase() === name.trim().toLowerCase());
+    if (ex) return ex.id;
+    const nt = { id: d.nextIds.teacher++, name };
+    d.teachers.push(nt);
+    log.rukNew++;
+    return nt.id;
+  };
+
+  for (const c of plan.classes) {
+    const buildingId = findOrCreateBuilding(c.buildingName);
+    const teacherId = findOrCreateRuk(c.teacherName);
+    if (c._existing) {
+      const ex = d.classes.find(x => x.id === c._existingId);
+      if (ex) { ex.buildingId = buildingId; ex.teacherId = teacherId; }
+    } else {
+      // не создавать дубликат, если класс уже есть (защита от гонки)
+      const dup = d.classes.find(x => x.name.trim().toLowerCase() === c.name.trim().toLowerCase());
+      if (!dup) {
+        d.classes.push({ id: d.nextIds.class++, name: c.name, buildingId, teacherId });
+        log.classesNew++;
+      }
+    }
+  }
+
+  // 3. Ученики
+  for (const s of plan.students) {
+    if (s._existing) continue;
+    let cls = d.classes.find(c => c.name.trim().toLowerCase() === s.className.trim().toLowerCase());
+    if (!cls) {
+      cls = { id: d.nextIds.class++, name: s.className, buildingId: d.buildings[0]?.id || 1, teacherId: null };
+      d.classes.push(cls);
+      log.classesNew++;
+    }
+    // не дублировать
+    const dup = d.students.find(x =>
+      x.lastName.trim().toLowerCase() === s.lastName.trim().toLowerCase() &&
+      x.firstName.trim().toLowerCase() === s.firstName.trim().toLowerCase() &&
+      (x.middleName || '').trim().toLowerCase() === s.middleName.trim().toLowerCase() &&
+      x.classId === cls.id
+    );
+    if (dup) continue;
+    d.students.push({
+      id: d.nextIds.student++,
+      lastName: s.lastName, firstName: s.firstName, middleName: s.middleName,
+      birthDate: s.birthDate, classId: cls.id,
+    });
+    log.studentsNew++;
+  }
+
+  // 4. Назначения учителей
+  for (const a of plan.assignments) {
+    const cls = d.classes.find(c => c.name.trim().toLowerCase() === a.className.trim().toLowerCase());
+    if (!cls) continue;
+    const t = d.subjectTeachersList.find(x => x.name.trim().toLowerCase() === a.teacherName.trim().toLowerCase());
+    if (!t) continue;
+    const idx = d.subjectTeachers.findIndex(x => x.classId === cls.id && x.subject === a.subject);
+    if (idx >= 0) d.subjectTeachers[idx].teacherId = t.id;
+    else {
+      d.subjectTeachers.push({ id: d.nextIds.subjectTeacher++, classId: cls.id, subject: a.subject, teacherId: t.id });
+      log.assignmentsNew++;
+    }
+  }
+
+  // 5. Оценки
+  for (const g of plan.grades) {
+    // ищем ученика по ФИО+класс
+    const cls = d.classes.find(c => c.name.trim().toLowerCase() === g.className.trim().toLowerCase());
+    if (!cls) { log.gradesSkipped++; continue; }
+    const parts = g.studentFio.split(/\s+/);
+    const lname = (parts[0] || '').toLowerCase();
+    const fname = (parts[1] || '').toLowerCase();
+    const mname = (parts[2] || '').toLowerCase();
+    let student = d.students.find(s =>
+      s.classId === cls.id &&
+      s.lastName.trim().toLowerCase() === lname &&
+      s.firstName.trim().toLowerCase() === fname &&
+      (s.middleName || '').trim().toLowerCase() === mname
+    );
+    if (!student) { log.gradesSkipped++; continue; }
+    // обновить или добавить
+    const idx = d.grades.findIndex(x =>
+      x.studentId === student.id &&
+      x.subject === g.subject &&
+      x.period === g.period &&
+      x.type === g.type &&
+      (x.year || '2024-2025') === g.year
+    );
+    if (idx >= 0) d.grades[idx].value = g.value;
+    else {
+      d.grades.push({
+        id: d.nextIds.grade++, studentId: student.id,
+        subject: g.subject, period: g.period, type: g.type,
+        value: g.value, year: g.year,
+      });
+      log.gradesNew++;
+    }
+  }
+
+  DB.save();
+  _packPreview = null;
+  closeModal();
+
+  const parts = [];
+  if (log.teachersNew) parts.push(`учителей: +${log.teachersNew}`);
+  if (log.teachersUpd) parts.push(`обновлено учителей: ${log.teachersUpd}`);
+  if (log.classesNew) parts.push(`классов: +${log.classesNew}`);
+  if (log.buildingsNew) parts.push(`зданий: +${log.buildingsNew}`);
+  if (log.rukNew) parts.push(`кл. руководителей: +${log.rukNew}`);
+  if (log.studentsNew) parts.push(`учеников: +${log.studentsNew}`);
+  if (log.assignmentsNew) parts.push(`назначений: +${log.assignmentsNew}`);
+  if (log.gradesNew) parts.push(`оценок: +${log.gradesNew}`);
+  if (log.gradesSkipped) parts.push(`оценок пропущено: ${log.gradesSkipped}`);
+
+  showToast('Импорт завершён: ' + (parts.join(', ') || 'без изменений'), 'success', 7000);
+  render();
+}
 /* ============================================================
    СТАРТ ПРИЛОЖЕНИЯ
    ============================================================ */
